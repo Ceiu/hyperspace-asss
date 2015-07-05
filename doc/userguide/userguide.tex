@@ -1,0 +1,1164 @@
+
+\documentclass{article}
+
+% enlarge the page a bit
+\addtolength{\hoffset}{-1.25cm}
+\addtolength{\textwidth}{2.5cm}
+\addtolength{\voffset}{-2cm}
+\addtolength{\textheight}{4cm}
+
+% make new commands to enforce some style
+\newcommand{\asss}{asss}
+\newcommand{\subgame}{subgame}
+
+% for the output of the command doc generator
+\newcommand{\command}[1]{\subsection*{#1}}
+\newcommand{\requiremod}[1]{\noindent\textbf{Requires module:} \texttt{#1}\\}
+\newcommand{\targets}[1]{\noindent\textbf{Possible targets:} #1\\}
+\newcommand{\args}[1]{\noindent\textbf{Arguments:} #1\\}
+
+% for the output of the setting doc generator
+\newcommand{\setting}[2]{\vspace{10pt}\noindent\textbf{#1:#2}\\}
+\newcommand{\settingtype}[1]{\noindent\textbf{Type}: #1\\}
+\newcommand{\settingfile}[1]{\noindent\textbf{File}: \texttt{#1}\\}
+\newcommand{\settingdefault}[1]{\noindent\textbf{Default}: #1\\}
+\newcommand{\settingrange}[1]{\noindent\textbf{Range}: #1\\}
+
+% this is for making tex2page output have nice angle brackets
+\ifx\shipout\undefined
+\newcommand{\lt}{\rawhtml&lt;\endrawhtml}
+\newcommand{\gt}{\rawhtml&gt;\endrawhtml}
+\newcommand{\vbar}{\rawhtml|\endrawhtml}
+\else
+\newcommand{\lt}{$<$}
+\newcommand{\gt}{$>$}
+\newcommand{\vbar}{$|$}
+\fi
+
+
+\title{\asss{} User's Guide -- 1.4.2}
+\author{\small Grelminar \lt{}\texttt{grelminar@yahoo.com}\gt{}}
+
+\begin{document}
+
+\maketitle
+
+\section{Introduction}
+
+\asss{} is a new server for Subspace and Continuum. It was written from
+scratch by Grelminar (\verb/grelminar@yahoo.com/), with help from a
+bunch of other people (see the Acknowledgements section). The name
+\asss{} is an acronym for ``a small subspace server.''
+
+Although care has been taken to remain compatible with the original
+Subspace server, known as \subgame{}, players, and especially staff and
+administrators, should be aware that \asss{} is a different piece of
+software. It has many features that \subgame{} is missing, but it is
+also missing some from \subgame{}. The features that are common to both
+may work different. They will have different bugs. In short, don't
+expect everything to work the same as in \subgame{}, because it won't.
+
+\subsection{Platform and Requirements}
+
+\asss{} was developed primarily on a Linux system on the Intel x86
+platform. Although some effort has been spent making it run on Windows
+also, people running it on non-Linux systems should not expect
+everything to work perfectly: there may be missing features and it may
+run slower.
+
+The requirements for building and running \asss{} are pretty minimal:
+The system should have the pthreads library (any recent Linux system
+should), Berkeley DB 4.0 or greater (older versions won't work)
+(optional), mysql (optional), Python 2.2 or newer (optional), and zlib.
+To compile \asss{} from source (on either Linux or Windows), the include
+files for those libraries must be installed, as well as a C compiler. If
+you've obtained the source from CVS, you'll also need the Python
+interpreter in order to generate certain files. If you're using a
+tarball instead, it will come with those files present already.
+
+The Makefile contains some information about which parts of it might
+need to be modified for your environment. You'll probably have to modify
+the paths that point to installed libraries.
+
+It also contains some options that you can change to customize the build
+process to your environment. You can turn debugging, optimization, and
+profiling on and off by changing the values of the \verb/debug/,
+\verb/opt/, and \verb/prof/ Makefile variables to \verb/yes/ or
+\verb/no/.
+
+If you're missing mysql, you should comment out or change the
+\verb/have_mysql/ variable. That will disable building all modules that
+require mysql, which is currently only the alias database. If you're
+missing Berkeley DB, you should comment/change the line that sets
+\verb/have_bdb/. This will disable the scoring modules and the
+\verb/dbtool/. And if you're missing Python, you should comment/change
+the line that sets \verb/have_python/, which will disable the Python
+module loader.
+
+The Makefile should work without excessive modification on Linux,
+FreeBSD, Cygwin, and Mingw32.
+
+Currently, only 32-bit Intel platforms are supported because of
+byte-order issues. Eventually, \asss{} will be able to run on other
+architectures, but for now, Intel will have to do.
+
+
+%\subsection{Reporting Bugs}
+%
+%There is an online bug-management system set up at this url:
+%
+%\verb|http://asss.yi.org:2400/asss/|
+%
+%\noindent You don't need an account to create new tickets, although you
+%do to modify them. Please check that you're not reporting a duplicate
+%bug before you submit a new ticket. And finally, it's running off of my
+%cable modem, so go easy on it.
+
+
+\section{File Layout}
+
+The server always access files relative to the directory it was started
+from, and it expects to have certain files and directories in certain
+places. That means that to run multiple copies of the server on one
+machine, you should make sure that each one is started from its own home
+directory.
+
+Here's what a typical zone's file layout should look like:
+\begin{verbatim}
+/home/myzone
++ news.txt
++ scrty
++ scrty1
++ bin
+| + asss
+| + dbtool
+| + backtrace
+| + scoring.so
+| + security.so
+| + fg_wz.py
+| + fg_turf.py
+| + ...
+|
++ arenas
+| + (default)
+| | + arena.conf
+| |
+| + (public)
+| | + arena.conf
+| |
+| + duel
+| | + arena.conf
+| |
+| + pb
+|   + arena.conf
+|   + balls.conf
+|   + pb.lvl
+|
++ conf
+| + global.conf
+| + modules.conf
+| + groupdef.conf
+| + groupdef.dir
+| | + default
+| | + mod
+| | + smod
+| | + sysop
+| |
+| + svs
+|   + svs.conf
+|   + prizeweights
+|   + misc
+|   + ship-warbird
+|   + ...
+|
++ log
+| + asss.log
+| + asss.log.1
+|
++ maps
+| + zone1-pub.lvl
+| + another.lvl
+|
++ data
+  + data.db
+\end{verbatim}
+
+The most important directory is \verb/bin/. This directory should
+contain the main \asss{} binary, as well as all files containing modules
+to be loaded by the main binary.
+
+\verb/conf/ contains config files that affect the server as a whole.
+Among the important files are \verb/modules.conf/, which specifies the
+list of modules to load at startup, \verb/global.conf/, which contains
+config settings for the whole server, \verb/groupdef.conf/, which
+describes which capabilities belong to each group, and
+\verb/staff.conf/, which assigns groups to various players.
+\verb/groupdef.conf/ uses files in the \verb/groupdef.dir/ subdirectory
+to ensure more powerful groups have all the capabilities of lesser ones.
+
+\verb/conf/ can also contain partial config files for arenas to include.
+The default directory structure contains an \verb/svs/ directory, with
+the Standard VIE Settings, split into multiple files, by ship and
+function.
+
+\verb/log/ will be used by the server to deposit any log files that it
+creates.
+
+\verb/data/ is used to keep the database holding all persistent
+information, including scores. Information for all arenas is kept in the
+same database file.
+
+\verb/maps/ is an optional directory that the server will search for
+\verb/.lvl/ files in. These files can also be located in arena
+directories, so this isn't a required directory. It might simplify
+administration, though, to keep all map files in this directory.
+
+Each arena gets its own subdirectory in the \verb/arenas/ directory that
+holds config files, maps, and other data. Two subdirectories are
+special: \verb/(public)/ is used for all public directories, and
+\verb/(default)/ is used for all arenas for which a directory doesn't
+exist. Note that it's ok for \verb/(public)/ to not exist, in which case
+public arenas will use the configuration from \verb/(default)/.
+
+Each arena directory must contain a file named \verb/arena.conf/, which
+contains the settings for that arena. For ease of administration, this
+file may \verb/#include/ other config files in either the same
+directory, or the global \verb/conf/ directory.
+
+The file \verb/news.txt/ should be located in the base of the zone
+directory as well, unless another location is specified in
+\verb/global.conf/.
+
+
+\subsection{Running \asss{}}
+
+\subsubsection{Command line arguments}
+
+There are currently three things you can give \asss{} on the command
+line:
+
+\begin{itemize}
+
+\item A directory name on the command line will be interpreted as the
+name of a directory containing the zone files (as described in the
+previous section). If no directory is specified, the current directory
+will be used.
+
+\item The optional switch \verb/--daemonize/ (abbreviated \verb/-d/)
+tells it to fork into the background before starting up. You might want
+to use this when running \asss{} from a startup script.
+
+\item Another switch, \verb/--chroot/ (abbreviated \verb/-c/), tell is
+to attempt to chroot to the zone directory before starting up. See the
+next section for more information on this.
+
+\end{itemize}
+
+\subsubsection{Running chrooted}
+
+If you want to increase the security of your host, you can run \asss{}
+chrooted. This means that it will run with its root directory set to the
+zone directory, and it won't be able to access any files outside of that
+directory.
+
+You need to do a bit of preperatory work before chroot can work. You'll
+need to make a \verb/lib/ directory in the zone directory containing all
+the shared libraries needed by any modules you'll be loading. On my
+machine, I needed to put the following files from \verb+/lib+ and
+\verb+/usr/lib+ in there:
+\verb/ld-linux.so.2,/,
+\verb/libc.so.6/,
+\verb/libpthread.so.0/,
+\verb/libz.so.1/,
+\verb/libm.so.6/, and
+\verb/libdb-4.0.so/.
+You'll also have to make sure that nothing within the zone directory is
+a symlink pointing outside of the zone directory. So you'll need a
+separate copy of the \verb/bin/ directory and shared settings files for
+each separate zone. It's also a good idea (although not strictly
+necessary) to create an \verb/etc/ directory with limited \verb/passwd/
+and \verb/group/ files, and also things like \verb/ld.so.conf/,
+\verb/hosts/, and \verb/nsswitch.conf/.
+
+If you're using Python modules, you'll also need a copy of the Python
+standard library in your chroot environment. It's usually found in
+\verb+/usr/lib/python2.3+. Note that you can hard-link the actual files
+to avoid wasting space.
+
+In order to do a chroot, \asss{} needs to be run as root. It won't
+continue running as root, of course: as soon as it successfully chroots,
+it drops its priviliges and runs as a normal user. The user it runs as
+depends how it was run: if the \asss{} binary is installed setuid-root,
+it will always drop to the user who invoked the binary. If it's actually
+run by the root user, it will use the contents of the \verb/USER/
+environment variable to control which user to drop to. So to run it as
+user ``nobody'' from a script running as root (like \verb/rc.local/),
+you can run something like
+\verb|env USER=nobody /path/to/asss /zone/dir --chroot --daemonize|.
+
+
+\section{Modules}
+
+Almost all of the functionality of \asss{} is split into many small
+modules. Currently modules can be written in either C or Python. Most
+core modules are written in C, since the Python module support is still
+somewhat experimental.
+
+C modules are in separate libraries with the extension \verb/.so/ (on
+Unix) or \verb/.dll/ (on Windows). One shared library can contain any
+number of modules.
+
+There are currently
+% expr `grep 'EXPORT *int *MM_[a-z]' ~/src/asss/src/*.c | wc -l` + `ls ~/src/asss/src/*.py | wc -l`
+79
+modules that are part of \asss{}, but each zone might have some
+custom-developed modules for their zone as well.
+
+When the server starts up, it loads all of the modules listed in the
+file \verb/modules.conf/. Once it's running, more modules can be loaded
+with the \verb/?insmod/ command, and modules can be unloaded with
+\verb/?rmmod/. The current list of loaded modules can be examined with
+\verb/?lsmod/.
+
+The \verb/modules.conf/ file has a special format that's slightly
+different from the rest of the config files. It has no sections. Each
+line should contain a ``module specifier.'' A module specifier is
+something of the form \verb/filename:module/ for C modules, or
+\verb/<py> filename/ for Python modules. The filename part should be the
+name of the file containing the module, without the extension (.so or
+.dll or .py). The module part should be a module name that's contained
+in the file. The colon separating them is just a colon. Comments in the
+\verb/modules.conf/ file are indicated by an initial semicolon or pound
+sign.
+
+If a particular zone has no need for a particular module (e.g., Chaos
+Zone doesn't have any flags or balls, so it doesn't need those modules),
+it should't load those modules. Only loading the modules that are
+actually used for a zone will decrease the memory usage of the server
+and may make it run faster.
+
+Once a module is loaded into the server, it has full access to the
+server's data, including player IP addresses, machine id's, scores, and
+passwords. It can also access files on the machine it is running on, and
+make network connections, and it can easily crash or deadlock the
+server. Python is a safe language, so a module written in Python can't
+crash the server. It can still deadlock it, though, and still has
+arbitrary access to the system. Thus, \textbf{admins and sysops should
+be careful to only load modules from sources that they trust.}
+
+
+\section{Capabilities}
+
+The old Subspace server supported a very limited notion of authority:
+There were moderators, super moderators, and sysops. Each level allowed
+access to more and more commands. Additionally, moderators and above
+could see private freqs and private arenas, and bypass freq and arena
+size limits.
+
+\asss{} is much more flexible. It lets sysops and admins assign any set
+of powers to any group of people. In the \asss{} model, each of the
+above powers, plus a few more, like energy viewing, is assigned a
+capability name. Each command also gets a capability name (actually,
+each command gets two, one for using the command with public messages,
+and one for using it with private messages). Whenever the server needs
+to determine if a player can take a certain action, it asks the
+capability manager, which replies either yes or no.
+
+The capability manager loads the file \texttt{conf/groupdef.conf}, which
+uses the files in \texttt{conf/groupdef.dif}, to determine which groups
+have which capabilities.
+
+The server comes with one capability manager, contained in the
+\texttt{capman} module, but there's no reason why another one couldn't
+be used if your zone has peculiar needs for assigning people powers.
+
+\subsection{Capability names}
+
+The most common capability names are for commands. If a player tries to
+run a command, say, \verb/?lastlog/, the server would query the
+capability manager with the name \verb/cmd_lastlog/. If a player uses a
+command as a private message, as in \verb/:annoying_player:?freqkick/,
+the capability name used would be \verb/privcmd_freqkick/.
+
+There are several non-command capabilities that are currently used in
+the server:
+
+\begin{itemize}
+\item{\texttt{seeprivarena}} controls whether private arena names are
+sent to a player for the \verb/?arena/ command.
+\item{\texttt{seeprivfreq}} determines if a player sees private freqs in
+the freq listing.
+\item{\texttt{findinprivs}} is needed by a player running \verb/?find/
+for the server to report the names of private arenas. (Not implemented
+yet.)
+\item{\texttt{seeepd}} allows players to see other ship's energy and
+specials from spectator mode. (``epd'' stands for extra position data.)
+\item{\texttt{seesysoplogall}} allows a player to see all important log
+messages in the zone.
+\item{\texttt{seesysoplogarena}} only allows a player to see only
+important log messages having to do with the arena he is currently in.
+\item{\texttt{seemodchat}} allows players to see the moderator chat.
+\item{\texttt{sendmodchat}} controls who can send moderator chat
+messages. Usually, these two capabilities would be given to the same
+people.
+\item{\texttt{uploadfile}} allows a player to upload files. Note that
+the player must also have the \texttt{cmd\_putfile} to upload a file
+using that command.
+\item{\texttt{bypasslock}} allows players to switch ships even though
+the arena or themselves have been locked into a ship or into spectator
+mode by a staff member.
+\item{\texttt{bypasssecurity}} lets players use unauthorized clients, or
+prevents kicking off for security checksum failures.
+\item{\texttt{invisiblespectator}} makes players not show up on the list
+given when the person they are spectating uses the \verb/?spec/ command.
+\item{\texttt{unlimitedchat}} allows a player (e.g., a bot) to bypass
+chat flooding checks.
+\item{\texttt{changesettings}} lets clients use the settings change
+packet (required for ?quickfix/?getsettings).
+\item{\texttt{isstaff}} makes players show up in ?listmod output.
+\item{\texttt{seeallstaff}} allows a player to see all non-default-group
+players, even if they lack \texttt{isstaff}.
+\end{itemize}
+
+
+\subsection{The default capability manager}
+
+The default capability manager works with groups. Each group has a set
+of capabilities, and players are assigned to groups. To check if a
+player has a certain capability, the capability manager simply checks if
+the group he's in has that capability.
+
+To determine which groups have which capabilities, the
+\verb/groupdef.conf/ file is used. It should have a section for each
+group, and a line within that section for each capability.
+
+To determine which players belong to which groups, the \verb/staff.conf/
+file is used. Each section in the file corresponds to an
+arena\footnote{Actually an arena group name; see the section on arena
+groups.}, except for the special section \verb/(global)/, which applies
+to and overrides all other arena settings. Keys are player names, and
+values are groups. So a setting like ``\verb/Grelminar=sysop/'' in the
+\verb/(global)/ section would give Grelminar sysop powers in all arenas,
+while a setting ``\verb/ZippyDan=smod/'' in the \verb/pb/ section would
+give ZippyDan smod powers in arenas \verb/pb/, \verb/pb1/, \verb/pb2/,
+etc.
+
+The command \verb/?setgroup/ can be used to control group assignment
+without editing the \verb/staff.conf/ file manually.
+
+The default capability manager also supports passwords for groups,
+although using this feature is strongly discouraged. It is intended for
+sysops or other staff members to gain privliged access when the zone
+isn't connected to a billing server to provide
+authentication.\footnote{But there's a better way to do this: if you
+load the \texttt{auth\_file} module before \texttt{billing}, the server
+will fall back to using \texttt{auth\_file} when the billing server is
+not connected. Staff members can set passwords using the
+\texttt{?passwd} command (specific to \texttt{auth\_file}), and they
+will have access to their usual group.} To use it, add keys to the
+\verb/GroupPasswords/ section, of the form ``\verb/group = password/''.
+
+
+\subsubsection{Emulating the old system}
+Using the default manager, it's relatively easy to set up \asss{} to
+emulate the old server's moderator, super moderator, and sysop model:
+The \verb/groupdef.conf/ file looks like this:
+
+\begin{verbatim}
+; conf/groupdef.conf
+
+[default]
+#include groupdef.dir/default
+
+[mod]
+#include groupdef.dir/default
+#include groupdef.dir/mod
+
+[smod]
+#include groupdef.dir/default
+#include groupdef.dir/mod
+#include groupdef.dir/smod
+
+[sysop]
+#include groupdef.dir/default
+#include groupdef.dir/mod
+#include groupdef.dir/smod
+#include groupdef.dir/sysop
+\end{verbatim}
+
+The files in \verb/groupdef.dir/ contain simply lists of capabilities.
+Each group includes the file for itself, as well as the files for the
+lesser powerful groups. The way \verb/groupdef.conf/ includes files
+means that smods will have all the capabilities of mods, plus more,
+sysops will have more than smods, etc.
+
+
+\section{Logging}
+
+\asss{} has extensive logging capabilities. Any remotely interesting
+event in the game will generate a log message, which will be passed to
+any number of loaded logging handlers.
+
+\subsection{Levels}
+
+There are five importance levels defined for log messages: DRIVEL is
+unimportant information that you probably don't want to see, but is
+logged anyway, just in case. INFO is basic information about common,
+unexceptional events. MALICIOUS is for exceptional conditions that are
+caused by players sending bad data to the server. These might be
+indications of cheating or other illicit activity. They also might be
+caused by abnormal network conditions. WARN is for error conditions that
+can be worked around, or aren't too catastrophic. ERROR is for really
+really horrible error conditions. These usually indicate misconfigured
+servers or bugs in the server itself.
+
+\subsection{What is logged?}
+
+There are currently
+% cat ~/src/asss/src/*.{c,py} | grep ">Log[AP]\?(L_" -c
+381
+% cat ~/src/asss/src/*.{c,py} | grep ">Log[AP]\?(L_" | sed 's/.*>Log[AP]\?(L_\([A-Z]*\).*/\1/' | sort | uniq -c
+distinct log messages in the server. By type, there are 37 ERROR
+messages, 111 WARN messages, 81 MALICIOUS messages, 65 INFO messages, and
+87 DRIVEL messages.
+
+\subsection{Filtering}
+
+Log handlers support a common method of filtering that give you lots of
+control over which handlers see which messages.
+
+By default, all messages are seen by all handlers. To limit messages to
+a handler \verb/log_foo/, create a section with the same name as the
+handler in \verb/global.conf/. The keys in that section will be module
+names, and the values will be a set of priority levels to allow,
+specified by listing the first letters of the allowed levels. The
+special key \verb/all/ will be used for modules not listed. For example:
+
+\begin{verbatim}
+; this keeps flag positions and ball fires from appearing in the log
+; file, but allows other DRIVEL messages.
+[log_file]
+all = DIMWE
+flags = IMWE
+balls = IMWE
+
+; this allows all messages to go to the console except those from
+; cmdman.
+[log_console]
+all = DIMWE
+cmdman = none
+
+; this lets only important messages (malicious and error) go to sysops
+[log_sysop]
+all = ME
+\end{verbatim}
+
+
+\subsection{Commands}
+
+In general, all commands run by anyone are logged, at level INFO, along
+with their parameters and targets. Some commands, however, contain
+personal or sensitive information that might be abused by zone staff who
+can view logs. To prevent this abuse, there is a hardcoded list of
+commands whose parameters don't get logged (they get replaced by
+\verb/.../ in the log messages).
+
+
+\subsection{Handlers}
+
+The current log handlers are:
+
+\begin{itemize}
+
+\item{\verb/log_console/} simply writes all log messages to standard
+out, which is usually the terminal that \asss{} is started from.
+Usually, \asss{} will run detached from any terminal, so this is
+primarily intended for debugging.
+
+\item{\verb/log_file/} write all log messages to a file. The name of the
+file is controlled by the \verb/Log:LogFile/ configuration option. The
+command \verb/?admlogfile/ may be used to flush or reopen the log file
+while the server is running. \asss{} always appends to a single file. If
+log rotation is desired, it should be accomplished with an external
+program such as \verb/logrotate/.
+
+\item{\verb/log_sysop/} informs players of log events within the game.
+``Important'' messages, as defined by the logging filter, are sent to
+players with the capabilities \verb/seesysoplogall/ and
+\verb/seesysoplogarena/. Players with the latter capability only see log
+messages that originated in the arena. This logging module also
+implements the \verb/?lastlog/ command.
+
+\item{\verb/log_staff/} broadcasts log lines generated by a specific set
+of commands to all online staff. The intention is to let other staff
+members know when one of them uses certain important commands. The
+default set of commands is \verb/?warn/, \verb/?kick/, and
+\verb/?setcm/, although the list is configurable with the
+\verb/log_staff:commands/ setting in \verb/global.conf/.
+
+\end{itemize}
+
+
+\section{New Features}
+
+\subsection{Arena groups}
+
+To make the process of creating multiple arenas with identical settings
+easier, \asss{} supports arena groups. If an arena name ending with a
+number is requested, the configuration and other data for that arena
+will be taken from the directory named by that arena without the number
+at the end. So arenas \verb/smallpb1/, \verb/smallpb2/, \verb/smallpb3/,
+etc. will all be identical in configuration to \verb/smallpb/, which
+uses data in the directory \verb|arenas/smallpb|.
+
+Persistent data (e.g., scores) are also partially shared between arenas
+in the same group. Data in the ``forever'' and ``per-reset'' intervals
+will be shared, but data in the ``per-game'' interval will be kept
+separate between different arenas in the group.
+
+The group name of an arena (the name without the number at the end) is
+also used for determining staff groups.
+
+\subsection{Freq Management}
+
+\requiremod{freqowners}
+If the arena controller allows it, private freqs can now be owned. The
+first player to move to a particular private freq becomes an owner for
+that freq. An owner can kick non-owners off of his freq by sending them
+the command \verb/?freqkick/. An owner can share owner privileges to
+other players by sending them the command \verb/?giveowner/. The spec
+freq can't be owned.
+
+The config variable \texttt{Team:AllowFreqOwners} controls whether to
+enable freq ownership. It defaults to on.
+
+\requiremod{fm\_password}
+The \verb/fm_password/ module implements password-protected freqs. It's
+a freq manager module meant to sit on top of another freq manager (like
+\verb/fm_normal/). The \verb/?freqpwd/ can be used by anyone on a
+private freq to set a password. To join a freq with a password, players
+must use the \verb/?joinpwd/ command before attempting to switch to the
+protected freq.
+
+\subsection{Arena limiting}
+
+\requiremod{arenaperm}
+Any arena can specify a \texttt{General:NeedCap} value in it's config
+file. If present, players will not be allowed to enter the arena unless
+they have the specified capability.
+
+
+\subsection{Moderator chat}
+
+\asss{} includes an actual moderator chat system, which should be an
+improvement over the \verb/?cheater/-based systems in use currently.
+
+Mod chat messages begin with a backslash (\verb/\/), and are displayed
+in dark red (the same color as sysop warning messages). Who is allowed
+to send and recieve mod chat is controlled by two capabilities:
+\texttt{seemodchat} and \texttt{sendmodchat}, which allow players to see
+and send mod chat.
+
+
+\subsection{Multiple commands}
+
+You can specify multiple commands on one line by putting a vertical bar
+(\verb/|/) directly after the command character (\verb/?/ or \verb/*/),
+and the separating commands with more bars. Do not put any spaces or
+other characters between the bars and the start of the command. Multiple
+private commands are supported, but you can't mix public and private
+commands on the same line. There's a hard limit of five commands on one
+line. Example: \verb/?|flagreset|shipreset|prize warp|aa go!/.
+
+
+\subsection{Built-in alias database}
+
+\requiremod{mysql, aliasdb}
+\asss{} includes a hastily-written alias database. The alias database
+depends on mysql support, although it's written so that it should be
+easy to port to another relational database if necessary.
+
+All logins are automatically entered if the \verb/aliasdb/ module is
+loaded. There are several ways to query the database: \verb/?alias/ lets
+you do general-purpose queries, \verb/?qip/ allows you to query by IP
+address range. \verb/?rawquery/ allows you to make custom queries with
+most SQL commands. You can find the documentation for these commands in
+the Commands section.
+
+The \verb/?last/ command uses the alias database to find the last 10
+people to log in.
+
+
+\subsection{Authentication}
+
+Ok, so this isn't new, but it's greatly expanded in functionality:
+authentication can now be done with things other than billing servers,
+and some authentication modules can be ``stacked.''
+
+For example, one useful auth module is \verb/auth_file/, which uses a
+file of hashed passwords to authenticate users. This module is intended
+for use by private servers who want to allow a small group of people
+(say, a squad) to play together, and not allow anyone else in. It can
+also be used as a fallback module by the \verb/billing/ module (which
+acts as an auth module, among other things). This means if the billing
+server is connected, login requests will be authenticated against the
+billing server, but if it isn't, they get passed to \verb/auth_file/.
+
+If the user is listed in the file and supplies a correct password, he
+will be allowed access and be granted groups. If not, he will be either
+accepted or rejected depending on the value of
+\verb/General:AllowUnknown/ setting in \verb/passwd.conf/. If an unknown
+player is allowed, he will \emph{not} be assigned groups based on name.
+(That will also not happen if no auth modules are loaded.)
+
+The \verb/auth_file/ module also allows you to lock a specific player
+name out of a zone.
+
+\textbf{Note:} In the default configuration, \verb/auth_file/ is
+insecure, since anyone can log in as a player that has no password set,
+and then set one. See the documentation for
+\verb/General:RequireAuthenticationToSetPassword/, and also read the
+comments in the default \verb/passwd.conf/.
+
+To use a fallback module for the \verb/billing/ module, simply make sure
+that that module is loaded before \verb/billing/ is loaded.
+
+Two more authentication modules are intended to be layered on top of the
+basic ones: \verb/auth_prefix/ lets only staff members log in with
+certain punctuation characters as prefixes to their real account names
+(controlled by the \verb/prefix_x/ capabilities), and \verb/auth_ban/
+implements simple banning by machine-id, as an authentication layer. It
+provides the \verb/?kick/, \verb/?listmidbans/, and \verb/?delmidban/
+commands to control the ban list.
+
+
+\subsection{Multiple ``public'' arenas}
+
+\asss{} supports a general player placement interface to decide which
+arena a player should be placed in upon entering the zone. The most
+useful arena placing interface is \verb/ap_multipub/, which has the
+effect of creating multiple ``public'' arenas.
+
+To use \verb/ap_multipub/, simply make sure it's loaded from
+\verb/modules.conf/ (somewhere near the end is good). It is controlled
+by two settings in the global config file: General:PublicArenas is a
+whitespace-separated list of public arena \emph{types} (not names). For
+example, if General:PublicArenas is set to ``\verb/pb turf wz/,'' the
+server will start placing people in the arena named \verb/pb1/, then
+when that gets full, it will move to \verb/turf1/, then \verb/wz1/,
+\verb/pb2/, etc. To control how many people it will put in each arena,
+use \verb/General:DesiredPlaying/, which is a count of \emph{playing}
+players (i.e., not spectators).
+
+
+\section{Lag Control}
+
+\subsection{Lag Measurement}
+
+Lag, which includes both latency and packetloss, is difficult to measure
+accurately and control. \asss{} does as well as it can with limited
+information.
+
+There are several ways that the server collects latency information:
+Position packets sent from the client contain timestamps that the server
+can compare to its own current time to determine approximately how long
+the packet took to get there. This is complicated by the fact that the
+times on the server and client aren't always perfectly synchronized.
+Reliable packets need to be acknowledged, and the round-trip time
+between the sending of a reliable packet and the reciept of its
+acknowledgement can be measured. That will be equal to approximately
+twice the one-way latency, but that isn't exact either because the two
+trips might take different amounts of time. Finally, the client can
+measure latency using the same techniques, and periodically send its
+results to the server for processing.
+
+Packetloss is slightly easier: the client and server can keep track of
+how many packets each has sent and recieved, and compare numbers
+periodically. Reliable packets also provide oppertunities to measure
+packetloss: if a reliable packet isn't acknowledged within the timeout,
+the server knows either the original packet or the acknowledgement got
+lost. If a reliable packet is recieved twice, the server knows the
+acknowledgement got lost. Again, the client can also measure these
+numbers and send the results to the server.
+
+\subsection{Settings and Actions}
+
+There is one global setting for lag, \texttt{Lag:CheckInterval} which
+controls how often each player's lag numbers are checked to perform
+actions. It's specified in ticks. Each arena can specify its own lag
+limits. All of the parameters described below go in the \texttt{Lag}
+section in the arena's configuration file (or a file included from it).
+
+There are four main values that lag actions are based on: average ping
+(determined by an exponential averaging scheme, based on S2C, C2S, and
+reliable pings), S2C packet loss, S2C weapons packet loss, and C2S
+packet loss. Each value has four thresholds associated with it: one
+controls when a player gets forced into spectator mode, one controls
+when a player is allowed to pick up flags and balls, and two control
+weapons ignoring. The units of the settings concerning latency are
+milliseconds, and the units of the settings concerning packetloss are
+tenths of a percent (i.e., fractions out of 1000).
+
+Forcing into spec is easy enough: if the value is over the threshold
+when a player is examined, he's forced into spec. Disabling flags and
+balls also works on a simple threshold: if the value is above it, the
+player won't be allowed to pick up any flags or balls. If he's currently
+carrying a flag or ball, and one of the values moves over the limit,
+he'll get to keep it.
+
+Weapon ignoring is slighly more complicated: There are two thresholds,
+one to start ignoring weapons, and one where all weapons will be
+ignored. If all of the values are below their respective starting
+thresholds, none of the player's weapons will be ignored. If one of them
+is higher, a percent of incoming weapons from that player to be ignored
+is calculated by interpolation between the starting threshold (0\%) and
+the higher threshold (100\%). If multiple values are above their
+starting threshold, the percent of weapons that gets ignored is the
+maximum of the percent ignored from each value. C2S packetloss doesn't
+cause weapon ignoring, since C2S packetloss generally gives the player a
+disadvantage, not an advantage.
+
+The names of these settings are:
+\texttt{PingToSpec},
+\texttt{PingToStartIgnoringWeapons},
+\texttt{PingToIgnoreAllWeapons},
+\texttt{PingToDisallowFlags},
+\texttt{S2CLossToSpec},
+\texttt{S2CLossToStartIgnoringWeapons},
+\texttt{S2CLossToIgnoreAllWeapons},
+\texttt{S2CLossToDisallowFlags},
+\texttt{WeaponLossToSpec},
+\texttt{WeaponLossToStartIgnoringWeapons},
+\texttt{WeaponLossToIgnoreAllWeapons},
+\texttt{WeaponLossToDisallowFlags},
+\texttt{C2SLossToSpec},
+and
+\texttt{C2SLossToDisallowFlags}. Their functions should be clear from
+their names and the above description.
+
+One final setting \texttt{SpikeToSpec}, determines the length of time
+that the server can recieve no packets from a player before forcing him
+into spectator mode.
+
+
+\subsection{Bandwidth Throttling}
+
+\asss{} supports bandwidth throttling for players on slower connections.
+To make the game fairer, packets are prioritized depending on their
+function. For example, weapons packets will be preferred over chat
+messages when deciding how to use up the last few bytes of alloted
+bandwidth. The server will also reserve a certain percentage of the
+total bandwith for packets of certain priorities. Techniques similar to
+those used in modern TCP implementations are used to dynamically adjust
+the bandwith limit to players based on their connection quality.
+
+
+\section{Regions and Extended LVL Files}
+
+\asss{} supports an extention to the classic map file format. The
+extension format is mostly backwards-compatible, so extended lvl files
+should work with any program that supports classic lvl files.
+
+Extended lvl files can contain various types of additional data. The
+simplest is a list of text attributes about the map, such as a name, a
+version, the map and tileset creators, and the programs used to create
+it. This data can be viewed with the \verb/?mapinfo/ command.
+
+The other important data that extended lvl files can contain, that
+\asss{} uses for new functionality, is regions.
+
+\subsection{What are regions?}
+
+A ``region'' is a named set of tiles, with optional assocated
+attributes. The tiles in a region can be an arbitrary set, and don't
+have to be in a certain shape or be connected (although things are more
+efficient if they are). A region has a name, which can be used to refer
+to it from a module (the details of how to do this are in the
+developer's guide, or at least will be eventually). Regions can also
+have several attributes which are interpreted by \asss{} itself.
+
+\subsection{Region attributes}
+
+Currently supported region attribute are: no-antiwarp, no-weapons,
+no-flags, and autowarp. If a region has the no-antiwarp attribute, the
+server will clear the antiwarp bit of any players in that region,
+effectively disabling their antiwarp (although it will appear to them
+that their antiwarp is still on; you should consider this when designing
+a zone using this feature). The no-weapons attribute means that the
+server will ignore weapons from players in the region, although again,
+the players themselves will still see their own weapons on their screen.
+The no-flags attribute prevents flags from being dropped in that region.
+The autowarp attribute (which requires the \verb/autowarp/ module to
+function) will automatically move a player to a different location,
+optionally in a different arena, when the region is entered.
+
+\subsection{Making extended lvl files}
+
+\verb/lvltool/, which is available on the \asss{} web site, is a simple
+command-line tool to manipulate extended lvl files. It's more of a
+proof-of-concept than a useful tool, although if you put enough effort
+in, you can use it to create arbitrary extended lvl files.
+
+The ``Continuum Level / Ini Tool,'' version 1-1-05 or later, is a
+graphical map editor, written in Java, that also supports creating
+extended lvl files.
+
+
+
+\section{Virtual Servers}
+
+\asss{} allows one server process to apear to clients as several
+different servers. The primary advantage of this feature is that players
+connecting to all virtual servers are treated the same internally and
+can move between arenas and communicate as if they connected to the same
+server.
+
+To create virtual servers, you have to tell the \verb/net/ module to
+listen on more than one port. You do this by creating additional
+sections in \verb/global.conf/ named ``Listen1,'' ``Listen2,'' etc. Each
+setting must specify a port, and can also optionally specify a virtual
+server identifier, and a specific IP address to bind to.
+
+Virtual server identifiers are used in several ways: if you are using an
+arena placing module that supports them (e.g., \verb/ap_multipub/), the
+server id will be used as the arena basename to place players who
+connect through that port in.
+
+The \verb/directory/ module also supports virtual servers: it will
+create one directory entry for each virtual server. The server name and
+description can be different for each virtual server. To specify them,
+create ``Name'' and ``Description'' settings in the section
+``Directory-\emph{servername}'' for each virtual server identifier. If
+either of those settings is missing from that section, it will fall back
+to their values in the ``Directory'' section.
+
+Finally, an example to make this all clear:
+
+\begin{verbatim}
+;; global.conf
+
+;; listen on 3 different ports:
+
+; players connecting to port 2000 will be send to a random arena.
+[Listen1]
+Port = 2000
+
+; players who connect to 5000 will be sent to pb1, pb2, etc.
+[Listen2]
+Port = 5000
+ConnectAs = pb
+
+; port 7500 will send them to aswz by default, and so on.
+[Listen3]
+Port = 7500
+ConnectAs = aswz
+
+; this will force the server to listen on an internal interface only
+; and send those players to a secret arena:
+[Listen4]
+BindAddress = 192.168.0.23
+Port = 3300
+ConnectAs = #secret
+
+[Directory]
+;; point to the directory servers you want to be listed on. using
+;; default port and password.
+Server1 = sscentral.one.com
+Server2 = sscentral.two.com
+
+;; now describe what this server is called by default:
+Name = A Testing Zone
+Description = Testing happens here.
+
+[Directory-pb]
+;; specify the name and description for pb:
+Name = PowerBall
+Description = Play with balls!
+
+[Directory-aswz]
+;; specify only name for aswz:
+Name = A Small Warzone
+\end{verbatim}
+
+
+\section{Using \texttt{dbtool}}
+
+FIXME!
+
+
+\section{Command Reference}
+
+These are all of the commands that the server currently recognizes. Not
+all of them will always be available. If a command requires a module
+that's not one of the core modules, that will be indicated above its
+description. Most other commands require the \texttt{playercmd} module.
+
+Possible targets are listed for each command. The targets can be
+``none,'' which refers to commands typed as public (arena) messages,
+``player,'' for commands that can target specific players, ``freq,'' for
+commands that can target a whole freq at a time (with either \verb/'/ or
+\verb/"/), or some restriction of one of those.
+
+Each command also describes any required or optional arguments.
+
+Note that the section doesn't list who is allowed to run a particular
+command, because that is determined by the capability manager, which can
+be fully customized for each particular server.
+
+\input{commands.tex}
+
+
+\section{Configuration Reference}
+
+All config files used by \asss{} (except \verb/modules.conf/) have the
+same format and conventions. The format is roughly based on, and is
+backwards compatible with, the Windows \verb/.ini/ file format, so
+\verb/server.cfg/ files can be used as-is, although you'll probably need
+to add a few settings to get things working well.
+
+Config files are processed line-by-line. All leading and trailing
+whitespace is ignored. A line is a comment if the first character
+(ignoring whitespace) is a semicolon or a forward slash. If the first
+character is a pound sign, it signals a preprocessor directive. These
+directives work very much like C preprocessor directives:
+\verb/#include/ allows one config file to include another.
+\verb/#define/ allows macros to be defined. Macros cannot currently take
+arguments. To reference the definition of a macro, you have to use
+\verb/$(MACRONAME)/, not just the name of the macro. The parens can be
+omitted if the character after the end of the macro name isn't
+alphanumeric. \verb/#ifdef/, \verb/#ifndef/, \verb/#else/, and
+\verb/#endif/ allow conditional inclusion of sections based on whether a
+specific macro is defined or not. If a line ends with a backslash, it
+denotes a line continuation: the following line of the file (or more if
+that line ends with a backslash) is appended to the original line before
+it is processed.
+
+The start of a section is a line starting with an open bracket and
+ending with a closing bracket. The text between the brackets is the
+section name. Any line containing an equals sign is a value: the text
+before the equals is the key name (minus leading and trailing
+whitespace) and the text after (again minus whitespace) is the value.
+Section names and values are case-insensitive, but the case of values is
+preserved. Lines that don't contain an equals sign also specify keys,
+and their associated value is the empty string. Value-less keys are used
+primarily in the capability manager, where the presence or absence of a
+capability is all that's important.
+
+If a key name contains a colon, it is treated specially: the text before
+the colon is treated as the section name for this key only (it doesn't
+modify the idea of the ``current section'') and the text after the colon
+is the key name.
+
+The following sections describe specific settings. They are sorted
+alphabetically by section and then by key. The settings are listed with
+the section and key names separated by a colon. The section name ``All''
+isn't a real section name but means the setting is present in a section
+for each ship.
+
+\input{settings.tex}
+
+\subsection{More detail on specific sections}
+
+\subsubsection{Flags}
+
+Flags in \asss{} are implemented by the coordination of several modules:
+\verb/flagcore/ implements the actual flag-related pieces of the game
+protocol, and general state-keeping. The rules for a specific flag game
+is implemented by a \verb/fg_something/ module, of which two are
+supplied with the server: \verb/fg_wz/ is a basic warzone-type flag
+game, where a team has to own all the flags to win. \verb/fg_turf/ is a
+turf-style game, where the flags are stationary, and points are awarded
+based on flags owned.
+
+To get one of these games working, you should make sure \verb/flagcore/
+and the desired flag game module are both loaded. Then attach the
+desired flag game module to your arena, by listing it in the
+\verb/Modules:AttachModules/ setting. Then configure it with the
+appropriate settings, all of which can be found in the \verb/Flag/
+section. At a minimum, for \verb/fg_wz/, you need to set
+\verb/Flag:FlagCount/.
+
+
+\subsubsection{Energy/inventory viewing}
+
+There are two arena settings that control whether players see other
+player's energy and ship inventory (from spec):
+
+\begin{itemize}
+
+\item{\texttt{Misc:SpecSeeEnergy}}
+This affects what players in spec see. If it's set to \verb/$SEE_ALL/,
+spectators see energy for all players. If it's \verb/$SEE_SPEC/, they
+see energy for only the player they are spectating, and if it's
+\verb/$SEE_NONE/, they don't see any player's energy.
+
+\item{\texttt{Misc:SeeEnergy}}
+This is like the previous setting, but applies to players in ships.
+\verb/$SEE_ALL/ and \verb/$SEE_NONE/ work as before. \verb/$SEE_SPEC/
+isn't allowed here, and a new option is \verb/$SEE_TEAM/, which allows
+everyone to see the energy of their teammates.
+
+\item{\texttt{Misc:SpecSeeExtra}}
+This boolean option determines whether spectators see the extra
+inventory data for players they are spectating.
+
+\end{itemize}
+
+In addition, there are two capabilities that override the above
+settings. \verb/seeepd/ allows players to see energy/inventory from
+spec, and \verb/seenrg/ allows energy viewing while playing.
+
+
+\section{Acknowledgements}
+
+Thanks to these people:
+
+\begin{itemize}
+
+\item{divine.216} for general support, lots of help testing, banner
+support, and many useful suggestions.
+
+\item{Mine GO BOOM} for lots of bug-finding and suggestions, as well as
+being the first person besides me to actually contribute code to
+\asss{}.
+
+\item{Stag Shot} for making sure powerball isn't left out, timer
+features, and other small contributions.
+
+\item{GiGaKiLLeR} for contributing a turf rewards module.
+
+\item{Mr. Ekted} for technical help and discussions.
+
+\item{ZippyDan} for encouragement and comic relief.
+
+\item{xalimar} for shell accounts and hosting, mostly.
+
+\item{numpf} for design critiques and other criticism.
+
+\item{Remnant} for being the first person to log into \asss{} (besides
+me, of course), and help testing.
+
+\item{The rest of the PowerBot chat} for friendly conversation and
+entertainment.
+
+\item{Dr Brain} for being brave enough to try \asss{} on a real live
+zone, report all the problems he had, and spend time helping me debug
+them.
+
+\item{Catid} for a bunch of contributions including security and other
+bug fixes.
+
+\item{PriitK} for helping with Continuum interoperability and also for
+some ambitious feature suggestions.
+
+% make sure this is correct first:
+%\item{dgus} for naming ASWZ (a small warzone), which suggested the name
+%of this server.
+
+\item{D.A.F. (not a subspace player)} for conversations on design and
+more.
+
+\end{itemize}
+
+\end{document}
+

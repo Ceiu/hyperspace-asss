@@ -1,0 +1,151 @@
+<html>
+<head><title>asss - source code</title></head>
+<body>
+
+	<h2>how to get the asss source code</h2>
+
+	<h6><a name="warning">warning</h6>
+
+	<p>
+	First, if you just want to run asss, you should download a release
+	from the <a href="/asss/">main page</a>, which includes pre-built
+	binaries for either Linux or Windows.
+	</p>
+
+	<p>
+	Second, you should be somewhat familiar with build tools like
+	compilers and the <tt>make</tt> program, version control systems,
+	and the basics of cryptography. Otherwise this might get confusing.
+	</p>
+
+	<h6><a name="monotone">monotone</h6>
+
+	<p>
+	I'm using <a href="http://venge.net/monotone/">monotone</a> as the
+	version control system for the asss source code. You should first
+	visit their <a href="http://venge.net/monotone/docs/">documentation
+	site</a> and read the Concepts and Tutorial sections. Then download
+	a copy of monotone (version 0.24 is recommended) and try playing
+	around with it for a while. Then <a href="#asss">skip down to</a>
+	the information you need to get the asss source.
+	</p>
+
+	<p>
+	Since I know you're probably not going to read all that, though,
+	I'll quickly sketch the basics of monotone here:
+	</p>
+
+	<p>
+	Monotone is a decentralized version control system. Each user
+	maintains a <i>database</i> on their own computer, which contains a
+	big bag of files and other information. Users can connect to each
+	other and swap files and other information. There is no "central
+	server" which has the authoritative copy of anything; instead each
+	user has his or her own view of the world, and they can sync up as
+	often as they want.
+	</p>
+
+	<p>
+	There are two types of things stored in the database: <i>files</i>,
+	and <i>revisions</i> (this is an inaccurate simplification, but
+	enough for our purpose). A file is a snapshot of a file on disk at
+	some point in time, and a revision is a snapshot of a directory
+	tree, which is list of files with their names and locations.
+	Revisions also contain information about history (which revision
+	they came from, etc.). Files and revisions are identified by their
+	cryptographic hashes.
+	</p>
+
+	<p>
+	A revision exists on a <i>branch</i>, which is a set of revisions
+	that conceptually belong to the same project, or sometimes a major
+	fork of development on a project.
+	</p>
+
+	<p>
+	The basic workflow when using monotone is: A user <i>checks out</i>
+	the latest revision (a) on some branch, makes some changes to their
+	files, and <i>commits</i> them to their database, creating a new
+	revision (b). Then they <i>push</i> that new revision, along with
+	the files contained in it, to some remote database. Or maybe another
+	user <i>pulls</i> the new revision from their database. Either way,
+	the second user now has a new revision in their database. Their
+	working copy was based on revision a, so they have to <i>update</i>
+	their working copy to b, and when they do, they'll see the changes
+	that the first user made. Update brings changes from the database
+	into the working copy.
+	</p>
+
+	<p>
+	Things get more complicated when two users both make changes at
+	once. Let's say user one creates revision b, based on a, and at the
+	same time, user two creates c, also based on a. When the two users
+	<i>sync</i>, they'll both have each other's new revisions, but they
+	won't be able to update, because the branch has two <i>heads</i>.
+	At least one of them will have to <i>merge</i> the two heads back
+	into one, and then exchange that new revision with the other one. To
+	actually see the results of the merge in their working copy they'll
+	have to update it to the new revision. Merges operate on the
+	database only, and create a new revision based on two existing ones.
+	</p>
+
+	<h6><a name="asss">asss</h6>
+
+	<p>
+	I have a dedicated monotone server for asss-related code. It's just
+	on a cable modem connection, so it's not very fast, and it might be
+	down sometimes. You should connect to <b>asss.yi.org</b> on the
+	standard monotone port (5253).
+	</p>
+
+	<p>Available branches:
+	<dl>
+		<dt><tt>asss.asss.main</tt></dt>
+		<dd>The asss code itself. This is probably what you want.</dd>
+		<dt><tt>asss.adminsh</tt></dt>
+		<dd>A system for running a server containing multiple
+		independently-administered asss zones.</dd>
+		<dt><tt>asss.aswz</tt></dt>
+		<dd>A couple of in-progress modules for ASWZ.</dd>
+		<dt><tt>asss.plog</tt></dt>
+		<dd>Simple packet-logging code.</dd>
+		<dt><tt>asss.bsss</tt></dt>
+		<dd>A half-complete billing server written in Erlang. Abandoned.</dd>
+	</dl>
+
+	<p>
+	The quickest possible way to get the code, after downloading a
+	montone binary, would be:
+	</p>
+
+<pre>
+monotone -d asss.db db init
+monotone -d asss.db pull asss.yi.org asss.asss.main
+monotone -d asss.db -b asss.asss.main checkout asss
+</pre>
+
+	<p>
+	Note that the pull command can take a very long time. It will
+	eventually finish, just leave it alone for a while.
+	</p>
+
+	<p>
+	Later, to update that working directory to the latest version, from
+	within the working directory:
+	</p>
+
+<pre>
+monotone pull
+monotone update
+</pre>
+
+	<p>
+	If you'd like commit access to the public server, please ask.
+	Monotone doesn't currently support fine-grained write access
+	control, so this requires a little bit of trust, but I'm willing to
+	do it nevertheless. You'll have to give me your monotone public key
+	(run <tt>monotone pubkey <i>keyid</i></tt>).
+	</p>
+
+</body>
+</html>

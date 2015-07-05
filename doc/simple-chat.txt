@@ -1,0 +1,147 @@
+
+simple chat protocol
+version 1.6
+grelminar@yahoo.com
+--------------------
+
+the protocol is ascii over tcp. each message contains several fields,
+the first of which a type field that determines the meaning of the
+remaining ones. fields are separated by a colon (':', ascii 58). each
+message is terminated by either a CR (ascii 13), a LF (ascii 10) or any
+combination of those two.
+
+either side can close the connection at any time. the other side should
+respond to this by closing their end of the connection also.
+
+unless otherwise specified, the last field for each message type is
+allowed to contain colons.
+
+player names are used to differentiate players. case is insignificant
+when comparing player names, but the server is required to use the same
+capitalization for all instances of the same player in the same session
+(i.e., if someone logs out and logs in again, the case of their name
+might change).
+
+the rest of this document will describe the possible message types. if
+you recieve an unsupported message type, you should ignore it. in the
+following, capital letters generally designate stuff that should be sent
+literally, as it is printed here. lowercase letters are descriptions of
+fields will be filled in with the relevant data.
+
+
+login:
+
+client sends:
+	LOGIN:version:name:password
+		(the version field contains the protocol version, and also some
+		information about the client. it should be of the form "1;client
+		name and version". for example, "1;ccc 1.2, by grelminar".)
+
+server will respond with one of:
+	LOGINBAD:message
+		(disconnect)
+or
+	LOGINOK:yourname
+		(the server/biller can rename clients, so the new name must be
+		sent back to the client)
+
+
+entering arenas:
+
+client sends:
+	GO:name
+		(use an empty name to mean "first public arena". note that even
+		if name is empty, the colon is still required.)
+
+
+server may reply:
+	INARENA:arenaname:freq
+		(client should clear its player list when it gets this. freq is
+		the freq that the client has been assigned. chat clients are
+		always in spectator mode, and never in ships.)
+	PLAYER:name:ship:freq
+		(one line for each player who's in the arena at the time when it
+		is entered.)
+
+
+enter/leave notification:
+
+server sends:
+	ENTERING:name:ship:freq
+		(when a player enters an arena)
+	LEAVING:name
+		(when a player leaves)
+
+
+ship/freq changes:
+
+client sends:
+	CHANGEFREQ:freq
+
+server sends:
+	SHIPFREQCHANGE:name:ship:freq
+		(ships are numbered from 0 (warbird) to 8 (spectator))
+
+
+kills:
+
+server sends:
+	KILL:killername:killedname:bounty:flagscarried
+
+
+chat (the important part):
+
+client sends:
+	SEND:PUB:msg
+	SEND:PUBM:msg
+	SEND:PRIV:name:msg
+		(the same message type works for both regular and remote priv msgs)
+	SEND:FREQ:freq:msg
+		(freq is the number of the destination freq)
+	SEND:CHAT:line
+		(line is either "msg" or "channelnum;msg")
+	SEND:MOD:msg
+	SEND:CMD:cmd
+	SEND:PRIVCMD:name:msg
+	SEND:SQUAD:squad:msg
+
+server sends:
+	MSG:ARENA:msg
+	MSG:CMD:msg
+	MSG:PUB:name:msg
+	MSG:PUBM:name:msg
+		(macroed pub message)
+	MSG:PRIV:name:msg
+	MSG:FREQ:name:msg
+	MSG:CHAT:channelnum:msg
+	MSG:MOD:name:msg
+	MSG:SYSOP:msg
+	MSG:SQUAD:squad:sender:msg
+
+
+miscellaneous:
+
+client or server can send at any time:
+	NOOP
+
+this can be used (by the client) to implement a keepalive ping to get
+around crappy nat routers, or (by the server) to help time out dead
+clients.
+
+
+
+document history:
+
+1.6:
+	added NOOP type.
+
+1.5:
+	added client name in the version field of LOGIN.
+	added PUBM message type.
+
+1.4 and before:
+	detailed history unavailable
+
+
+# dist: public
+

@@ -1,0 +1,118 @@
+
+here's the redirect packet, which works in cont today:
+
+struct S2CRedirect
+{
+	u8 type;           // 59 == 0x3b
+	u8 ip[4];          //where client should connect to
+	u16 port;
+	i16 arenatype;     // as in ?go packet
+	u8  arenaname[16];
+	u32 loginid;       //not used currently
+};
+
+
+when logging in due to a redirect, cont doesn't send the player's
+password (it's zero'd out).
+
+
+(my) ideal distributed server scheme:
+
+- player logs in to master server and enters an arena.
+
+- as part of the arena enter response, the server optionally gives the
+  client an ip/port of an arena server to use.
+
+- during play, most packets are still sent to the master server,
+  including all reliable packets.
+
+- certain packets should be sent to the arena server, if there is one:
+  position, weapons, and green pickups. maybe eventually watchdamage.
+
+- information the arena server needs from the master:
+  - list of players in the arena, including ip/ports, ships, and
+    freqs.
+
+- information the master needs from the arena server:
+  - once-in-a-while updated positions.
+  - region and safezone enter/exits, for callbacks.
+
+- encryption details:
+  - to be worked out.
+
+
+what we can do with this packet only (method 1):
+
+- player logs in to master server and enters an arena.
+
+- as part of the arena enter response, the server optionally redirects
+  the client to a whole different arena server.
+
+- during play, all packets are sent to the arena server.
+
+- the arena server deals with local arena stuff (position/weapons/chat)
+  itself locally, and forwards the rest as raw packets to the master
+  server, noting which client it came from.
+
+- to send packets to the client, the master has to forward everything
+  through the arena server.
+
+- the master will need a recently-used-password cache, because cont
+  won't send passwords to the arena server.
+
+- the code that runs as the arena server is static and simple, and no
+  third-party modules run there. it's essentially a smart local proxy.
+
+- encryption details:
+  - client<->arena and client<->master are encrypted with standard cont
+    encryption. each arena and master keeps its own scrty1 file.
+
+  - the arena<->master connection can probably be encrypted with cont
+    encryption too. this will require arranging to have a keystream
+    shared between them.
+
+
+method 2 (closer to what priit probably does currently):
+
+- player logs in to master server and enters an arena.
+
+- as part of the arena enter response, the server optionally redirects
+  the client to a whole different arena server.
+
+- during play, all packets are sent to the arena server.
+
+- the arena server deals with everything locally. it talks to the master
+  with a custom protocol for stuff it has no knowledge of:
+  - all file access, including db stuff.
+  - anything that has to go to the biller (only the master has a biller
+    connection).
+  - inter-arena chat.
+  - other stuff required by modules.
+
+
+
+notes:
+
+method 2 seems more fragile. it works for priit because subgame is
+static, and there are no third-party modules to worry about. it seems
+like the proxy must have local files, or else pass all file io to the
+master.
+
+method 1 is conceptually appealing: it should be possible to write it so
+that it can fall back to being a dumb proxy at any time. it's easy to
+write and easy to show it can't break things. it will, of course,
+increase latency of non-ppks.
+
+the proxy can't be stateless, since it needs to be able to decrypt the
+stream passing through it, which means holding a keystream and related
+notes for each connection. it also has to know which connections are in
+which arena. it can't assume the client gets exactly what it requested.
+which means there must be some extra master->proxy data being sent, to
+updates its idea of who's in what arena.
+
+the proxy will probably use a modified connection/encryption protocol so
+that each connection comes from the same source port but has the real
+source, or some connection id (pid?), encoded in it.
+
+probably, the master and each proxy would keep their own scrty1.
+

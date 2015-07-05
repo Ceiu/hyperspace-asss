@@ -1,0 +1,2 @@
+#!/bin/sh
+ps xwww | grep 'python .*[l]oadgen.py' | awk '{print $1;}' | xargs /bin/kill

@@ -1,0 +1,22 @@
+afk 1.2 [smong may 8 2005]
+
+-Compiling
+Linux: make -f afk.mk
+Win: .dll project (add util.c, zlib.lib, pthread.lib if necy)
+
+-Installation
+Put afk.so/.dll in bin/.
+Put afk:afk at the bottom of conf/modules.conf
+
+-Customisation
+Edit arena.conf:
+
+[AFK]
+Kick=0
+Spec=1
+InactiveTime=6000
+InactiveSafeTime=12000
+
+[Modules]
+AttachModules = ... afk
+

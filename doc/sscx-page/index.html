@@ -1,0 +1,248 @@
+<html>
+<head><title>a small subspace server</title></head>
+<body>
+
+	<h2>a small subspace server</h2>
+
+	<p>
+	asss is a server for the game <a href="http://www.subspacehq.com/">subspace</a>.
+	It has lots more features than the current server in use. It is
+	primarily developed on Linux, but also runs on other unix-like
+	systems, and at times, Windows.
+	</p>
+
+	<h6>news</h6>
+	<ul>
+
+		<li>January 14, 2006 - 1.4.2. Sorry for the long wait. The bug
+		tracker has been working well and almost all of the changes
+		since the last version have been based on bugs listed there.
+		There are too many small changes to list here; see the changelog
+		for details. One important change to note is how interfaces and
+		persistent data are implemented in python. If you use
+		<code>reg_interface</code>, <code>reg_player_persistent</code>,
+		or <code>reg_arena_persistent</code>, you'll have to change your
+		code. Oh, and the <code>bricklayer</code> module was renamed to
+		<code>brickwriter</code>, so if you load it, you'll have to
+		update your <code>modules.conf</code>.
+
+		<li>October 15, 2005 - 1.4.1. New version with a bunch of
+		accumulated bug fixes, and a few new modules: redirect and
+		obscene.
+
+		<li>October 10, 2005. Still no new version, but I've written
+		some instructions for getting access to the latest version of
+		the <a href="source.html">asss source</a> using monotone.
+
+		<li>September 16, 2005. No new version, but now there's a
+		<a href="bugs">bug tracker</a> available.
+
+		<li>June 3, 2005. There's a new build of 1.4.0 for windows, to
+		fix a building bug that I really should have caught earlier.
+		Hopefully this is the last of the build-related problems. Use
+		the link for "1.4.0 (windows full)" below.
+
+		<li>May 14, 2005 - 1.4.0. There isn't really any new big
+		features here, but it's been a while, and there was some
+		significant reorganization of the source code directory
+		structure and build process, so I figured it deserved a jump in
+		version numbers. Here's a brief summary of all the new stuff
+		since January:
+
+		<p>
+		<a href="userguide.html">User guide</a> updates, fixed no-flags
+		region attribute, improved ap_multipub placing, per-player
+		settings overrides, support for non-whole-byte settings
+		overrides, fixed various bugs (position-based speccing, a
+		crashing race condition, map checksums, deadlocks related to
+		setting ship/freq), tweaked the syntax for multi-commands
+		slightly, rewrite of bandwidth limiting stuff, switched version
+		control from cvs to <a href="http://venge.net/monotone/">monotone</a>
+		(instructions coming soon), reorganized source directory
+		structure and cleaned up makefiles and build process, and a slew
+		of <a href="ccc">ccc</a> features (automkwin, "all" window,
+		auto-reconnect, and ?ignore).
+
+		<li>January 29, 2005 - 1.3.6. This is mostly bug fixes for all
+		the new flag stuff in 1.3.5.
+
+		<li>January 8, 2005 - 1.3.5. Sorry it's been so long. This
+		update has a bunch of new features and myriad bug fixes. The
+		biggest ones are probably the brand-new flag code, and
+		improvements to the python support. This version has also been
+		built for windows (still using Dev-C++).
+
+		<li>September 13, 2004 - 1.3.2: The windows build with VC
+		Toolkit wasn't working out, so I switched to mingw32 and the <a
+			href="http://www.bloodshed.net/dev/">Dev-C++ IDE</a>. This
+		release contains almost everything you'll need to build asss on
+		windows. You just need to download Dev-C++ and
+		<a href="http://python.org/2.3.4/">Python 2.3.4</a>. On the
+		Linux side, you still need to track down the dependencies on
+		your own.
+
+		<br>Besides the build, the only other notable new feature here
+		is support for Continuum 0.39pr1. I wasn't planning to do this
+		yet, but enough people were complaining that I changed my mind.
+		Enjoy.
+
+		<li>September 6, 2004 - 1.3.1: This is a development release
+		that contains some new stuff, like support for extended lvl
+		files. Currently the only program that can create extended lvl
+		files is lvltool, available below (I'll merge it into the main
+		package soon). Note that a lot of interfaces have changed, so
+		you'll probably need to recompile your modules.
+
+		<br>Also, there's now a windows build. I'm not sure if it's
+		presented in the most useful way, so if you have suggestions,
+		I'd like to hear them.
+
+		<li>July 28, 2004: Yay, 1.2.0! I just recently got back from
+		being away from computers and subspace for a while, so I forgot
+		what's new in this release, but I figure it's long past due to
+		put it up. I've been avoiding making major changes and just
+		fixing small bugs lately, so I think it's a good time to label
+		this the start of a stable series. I'm going to start a 1.3 line
+		with more drastic development soon.
+
+		<li>June 12, 2004: Another update without new code. This one has
+		good news, though: To go along with the changelog (which is
+		still working and might have more frequent updates than this
+		page), there's API documentation, generated by
+		<a href="http://www.stack.nl/~dimitri/doxygen/">Doxygen</a>.
+		The link's at the bottom of the page. It's not beautiful or
+		incredibly helpful, but it's better than nothing, and there's
+		more coming, I hope.
+
+		<li>April 19, 2004: This is an update without a new release.
+		Sorry. I've been busy and haven't time to get to everything I
+		want to get to before I label it 1.1.8. One bit of good news is
+		that I managed to get a semi-automated changelog generator thing
+		working, so there's a link to the CVS changelog at the bottom of
+		the page. The other bit is that there are lots of nice bug fixes
+		and things since 1.1.7, including (I hope) the (infamous?) lag
+		coma bug.
+
+		<li>January 20, 2004 - 1.1.7: There have been a lot of small
+		important changes since the last version. Most imporant are
+		probably some drastic changes to the network layer that fix
+		problems with reliable packets that people had been having, and
+		also make reliable processing more efficient. Also fixed a
+		frequent deadlock bug, a crash bug, added MaxDeathsWithoutFiring
+		support, added a timeout to ?kick, fixed the null squad message
+		thing, moved a lot of core modules into the main binary, some
+		changes to support compiling with MinGW (so you might expect
+		windows binaries from me at some point), added support for a new
+		ping protocol, and added ?arena -t.
+
+		<li>November 21, 2003 - 1.1.6: A new release. Lots of fixes, and
+		some small new features. Yeah, the version number jumped a bit
+		since it's been so long. I'm going to try to get something to
+		take my (somewhat) detailed change logs from CVS and post them
+		here.
+
+		<li>September 18, 2003 - 1.1.3: Fixed a big bug, added
+		?recyclearena, other tiny changes.
+
+		<li>September 10, 2003 - 1.1.2: Sorry it's been so long. This update
+		has a lot of bug fixes, a few new or fixed commands, a bunch of
+		new ccc features (for all 4 of you who use it), and the
+		beginnings of a developer guide.
+
+		<li>July 27, 2003 - 1.1.0: I'm going to start adopting the convention
+		that even minor version numbers mean stable releases, and odd
+		minor version numbers mean unstable development releases. I
+		fixed a few things and have something to call a final 1.0. I've
+		also been working on new experimental stuff, and I'm releasing
+		that as 1.1.0 now. So if you'd like to try the latest crazy
+		stuff, try that. If you want something that might be a little
+		more stable, try 1.0 (I did backport a bunch of fixes that I
+		made between 1.0rc2 and 1.1.0 to 1.0).
+
+		<li>1.0rc2: Just a few minor fixes here. Probably the most
+		important is to the directory module: it now supports multiple
+		listening ports and a few bugs were fixed. Also, there are
+		binaries for freebsd included this time, plus a little patch to
+		help you compile it on your own.
+
+		<li>1.0rc1: This is the first of hopefully few release
+		candidates for version 1.0. What's so special about 1.0?
+		Nothing, really. It's just a nice round number, and I wanted to
+		wait until all the core features were basically complete before
+		calling something 1.0. Anyway, please test this and let me know
+		about any urgent bugs. I'd like to have 1.0 be something stable
+		so I can start adding crazy new features soon.
+
+		<li>Here's 0.9.13: A lot of bugs have been fixed, and there's
+		some new stuff. Continuum 0.38 is required to connect to it
+		(there's nothing in the code requiring that, it's just that I
+		turned on the packet crc check and 0.37 doesn't send correct
+		crcs, so it can't connect).
+	</ul>
+
+	<h6>download</h6>
+	<ul>
+		<li><a href="asss-1.4.2.tar.gz">version 1.4.2 (full)</a>
+			<a href="asss-1.4.2-srconly.tar.gz">(source only)</a>
+			<a href="asss-1.4.2.zip">(windows full)</a> (latest)
+		<li>older versions:
+		<li><a href="asss-1.4.1.tar.gz">version 1.4.1 (full)</a>
+			<a href="asss-1.4.1-srconly.tar.gz">(source only)</a>
+			<a href="asss-1.4.1.zip">(windows full)</a>
+		<li><a href="asss-1.4.0.tar.gz">version 1.4.0 (full)</a>
+			<a href="asss-1.4.0-srconly.tar.gz">(source only)</a>
+			<a href="asss-1.4.0p1.zip">(windows full)</a>
+		<li><a href="asss-1.3.6.tar.gz">version 1.3.6 (full)</a>
+			<a href="asss-1.3.6-srconly.tar.gz">(source only)</a>
+			<a href="asss-1.3.6.zip">(windows with source)</a>
+			<a href="asss-1.3.6-binonly.zip">(windows binary only)</a>
+		<li><a href="asss-1.3.5.tar.gz">version 1.3.5 (full)</a>
+			<a href="asss-1.3.5-srconly.tar.gz">(source only)</a>
+			<a href="asss-1.3.5.zip">(windows with source)</a>
+			<a href="asss-1.3.5-binonly.zip">(windows binary only)</a>
+		<li><a href="asss-1.3.2.tar.gz">version 1.3.2 (full)</a>
+			<a href="asss-1.3.2-srconly.tar.gz">(source only)</a>
+			<a href="asss-1.3.2.zip">(windows with source)</a>
+			<a href="asss-1.3.2-binonly.zip">(windows binary only)</a>
+		<li><a href="asss-1.3.1.tar.gz">version 1.3.1 (full)</a>
+			<a href="asss-1.3.1-srconly.tar.gz">(source only)</a>
+			<a href="asss-1.3.1.zip">(windows with source)</a>
+			<a href="asss-1.3.1-nosource.zip">(windows binary only)</a>
+		<li><a href="asss-1.2.0.tar.gz">version 1.2.0 (full)</a>
+			<a href="asss-1.2.0-srconly.tar.gz">(source only)</a>
+		<li><a href="asss-1.1.7.tar.gz">version 1.1.7 (full)</a>
+			<a href="asss-1.1.7-srconly.tar.gz">(source only)</a>
+		<li><a href="asss-1.1.6.tar.gz">version 1.1.6 (full)</a>
+			<a href="asss-1.1.6-srconly.tar.gz">(source only)</a>
+		<li><a href="asss-1.1.3.tar.gz">version 1.1.3 (full)</a>
+			<a href="asss-1.1.3-srconly.tar.gz">(source only)</a>
+		<li><a href="asss-1.1.2.tar.gz">version 1.1.2 (full)</a>
+			<a href="asss-1.1.2-srconly.tar.gz">(source only)</a>
+		<li><a href="asss-1.1.0.tar.gz">version 1.1.0</a>
+		<li><a href="asss-1.0.tar.gz">version 1.0</a>
+		<li><a href="asss-1.0rc2.tar.gz">version 1.0rc2</a>
+		<li><a href="asss-1.0rc1.tar.gz">version 1.0rc1</a>
+		<li><a href="asss-0.9.13.tar.gz">version 0.9.13</a>
+		<li><a href="asss-20030327.tar.gz">2003.03.27</a>
+		<li><a href="asss-20030221.tar.gz">2003.02.21</a>
+		<li><a href="asss-20030124.tar.gz">2003.01.24</a>
+		<li><a href="asss-20030108.tar.gz">2003.01.08</a>
+	</ul>
+
+	<h6>other useful things</h6>
+	<ul>
+		<li><a href="bugs/">bug tracker</a>
+		<li><a href="changelog.txt">changelog</a> (converted directly from monotone logs)
+		<li><a href="userguide.html">user's guide (html)</a>
+		    <a href="userguide.pdf">(pdf)</a>
+		<li><a href="devguide.html">developer's guide (html)</a>
+		    <a href="devguide.pdf">(pdf)</a>
+		<li><a href="doxygen/html/">api documentation</a>
+		<li><a href="lvltool.py">lvltool</a>, to create extended lvl files
+		<li><a href="source.html">latest source code</a>
+		<li><a href="http://forums.minegoboom.com/">mine go boom's forums</a>
+		<li><a href="mailto:grelminar at yahoo dot com">send email to me</a>
+	</ul>
+
+</body>
+</html>

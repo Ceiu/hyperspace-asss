@@ -1,0 +1,34 @@
+
+methods for measuring lag
+
+latency
+  round trip delay on rel packets
+    pros: accurate
+    cons: have to divide by two to get latency
+
+  diff between timestamp on pos packets
+    pros: very frequent
+    cons: not really acurate
+
+  the same two above, but client measures and reports
+    pros: you get more data
+    cons: have to trust client
+
+packetloss
+  number of times you have to resend rel
+    pros:
+    cons: doesn't give you the dir of the ploss
+
+  number of dup'd rel packets you get
+    pros: it definitely means a dropped ack s2c
+    cons: pretty rare, can't get real stats from it
+
+  ask client for number of packets sent/recvd
+    pros: very accurate
+    cons: have to trust client
+
+
+how to report it
+
+
+

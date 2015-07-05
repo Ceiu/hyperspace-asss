@@ -1,0 +1,57 @@
+#!/bin/sh
+
+set -e
+set -x
+
+umask 022
+
+: using ASSSDIR=${ASSSDIR:=~/src/asss}
+: using CENCDIR=${CENCDIR:=~/src/contenc}
+
+cd $ASSSDIR
+
+d="asss-`sed -n 's/#define ASSSVERSION "\(.*\)"/\1/p' src/include/defs.h`"
+
+rm -rf $d
+cp -a dist $d
+mkdir $d/{data,log,tmp}
+
+rm -rf doc/doxygen/*
+tar cf - `grep -lr '[d]ist: public' src scripts doc` scripts/banner.font | \
+	(cd $d ; tar xf -)
+
+(cd $d/src ; ln -s ${CENCDIR} contenc)
+make -C $d/src link_db_statically=yes symlink_bins=no debug=no opt=yes
+rm -f $d/src/contenc
+rm -rf $d/build
+
+for subject in user dev; do
+	make -C doc/${subject}guide "ASSSDIR=$ASSSDIR" all
+	cp doc/${subject}guide/${subject}guide.{pdf,html,txt} $d/doc
+	make -C doc/${subject}guide "ASSSDIR=$ASSSDIR" clean
+done
+
+test -d freebsd && cp -a freebsd $d
+test -d freebsd || rm -f $d/*freebsd*
+rm -f $d/*.win32 $d/*.bat
+
+find $d -name MT -exec rm -rf {} \; -prune
+find $d -name CVS -exec rm -rf {} \; -prune
+find $d -name .stamp -exec rm -rf {} \; -prune
+
+find $d -exec touch -r $d/bin/asss {} \;
+tar --numeric-owner -czvf $d.tar.gz $d
+
+# exit
+
+set +e
+
+# make smaller package
+rm -rf $d/doc/*.pdf $d/clients/* $d/scrty* $d/arenas/scf/scf.lvl
+rm -rf $d/bin $d/freebsd/bin/*
+
+#find $d -exec touch -r $d/bin/asss {} \;
+tar --numeric-owner -czvf $d-srconly.tar.gz $d
+
+rm -rf $d
+

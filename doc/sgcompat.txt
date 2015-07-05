@@ -1,0 +1,238 @@
+
+to do:
+
+*watchgreen
+turn on green watching for a player.
+greens are sent as priv msgs.
+
+*restart
+"restarts timed games (speed zone)"
+
+
+*trace
+runs traceroute subprocess.
+do later.
+
+
+already supported/check output format:
+
+?owner
+*specall
+*timereset
+*scorereset
+*shipreset
+*listmod
+*prize
+*info
+*flagreset
+*timer
+*setship
+*setfreq
+*lag
+*version
+*lag
+*watchdamage
+*warn
+*warpto
+*shutdown
+
+
+will not do:
+
+*lowbandwidth
+*packetloss
+*ufo
+*super
+*banner
+
+
+toggle crap:
+
+*lockteam
+alias to ?setcm -freq
+
+*lockprivate
+alias to ?setcm -priv
+
+*lockpublic
+alias to ?setcm -pub -pubmacro
+
+*lockchat
+alias to ?setcm -chat
+
+*lockall
+alias to ?setcm -all
+
+*shutup
+alias to /?setcm -all
+
+*lock
+"locks game so nobody can enter (toggle) (everybody put in spectator
+mode)"
+sort of like ?lockarena -s/?unlockarena
+
+*spec
+"sent privately, forces specified player into spec mode (locks him there
+too)"
+sort of like ?lock -s/?unlock
+
+*lockspec
+"toggles the *lock's to effect only spectators or everyone."
+???
+
+
+
+done:
+
+?zone
+prints the name of the current zone?
+
+*points n
+add n points to player (to flag points)
+
+*energy
+turn on energy viewing for that person
+
+*where
+prints coords of player
+
+?recycle
+alias to ?recyclearena
+
+?get
+alias to ?geta
+
+?set
+alias to ?seta
+
+?setlevel
+alias to ?putmap
+
+*listban
+alias to ?listmidbans
+
+*removeban
+alias to ?delmidban
+
+*kill
+alias to ?kick
+
+*log
+alias to ?lastlog
+
+*zone
+alias to ?z
+
+*flags
+alias to ?flaginfo
+
+*locate
+alias to ?find
+
+*recycle
+alias to ?shutdown -r
+
+*sysop
+alias to ?setgroup sysop
+
+*smoderator
+alias to ?setgroup smod
+
+*moderator
+alias to ?setgroup mod
+
+*arena
+alias to ?a
+
+*stat
+"displays server statistics"
+
+*einfo
+extended info
+
+*tinfo
+time info
+
+
+
+
+
+
+
+output formats:
+
+from stag:
+
+
+*listmod:
+
+Don the Bot - Sysop - #noballs 
+Bot-PB-Master - Sysop - #master 
+Bot-PB-Public-1 - Sysop - Public 0 
+Bot-PB-SmallPB-1 - Sysop - smallpb3h 
+Bot-PB-Smallpub-1 - Sysop - smallpub 
+Bot-PB-ProBall-1 - Sysop - proball 
+Bot-PB-Scramble-1 - Sysop - scramble 
+Stag the Bot - SMod - #noballs
+
+
+*where:
+
+nick: A12
+
+
+*tinfo:
+ ServerTime    UserTime        Diff 
+  -30816318      108753   -30925071 
+  -30815943      109253   -30925196 
+  -30815564      109753   -30925317 
+  -30815181      110253   -30925434 
+  -30814804      110754   -30925558 
+  -30814424      111254   -30925678 
+  -30814046      111754   -30925800 
+  -30813669      112254   -30925923 
+  -30813293      112754   -30926047 
+  -30812917      113254   -30926171 
+  -30812537      113754   -30926291 
+  -30812165      114254   -30926419 
+  -30811787      114754   -30926541 
+  -30811409      115256   -30926665 
+  -30811034      115756   -30926790 
+  -30810658      116256   -30926914 
+  -30810277      116757   -3092703
+
+
+*einfo:
+
+Stag Shot: UserId: 1072307  Res: 1280x1024  Client: Continuum 0.39  Proxy: Not using proxy  Idle: 0 s  Timer drift: -246
+
+
+*info:
+
+IP:65.11.192.123  TimeZoneBias:300  Freq:420  TypedName:Stag Shot  Demo:0  MachineId:1863256170 
+Ping:140ms  LowPing:140ms  HighPing:180ms  AvePing:150ms 
+LOSS: S2C:0.1%  C2S:0.0%  S2CWeapons:0.0%  S2C_RelOut:2(175) 
+S2C:8794-->8725  C2S:839-->844 
+C2S CURRENT: Slow:0 Fast:8 0.0%   TOTAL: Slow:0 Fast:303 0.0% 
+S2C CURRENT: Slow:3055 Fast:904 77.2%   TOTAL: Slow:1120 Fast:317 77.9% 
+TIME: Session:    0:03:00  Total: 2992:17:00  Created: 1-31-2001 00:40:08 
+Bytes/Sec:1418  LowBandwidth:0  MessageLogging:0  ConnectType:UnknownNotRAS
+
+
+*lag:
+
+PING Current:140 ms  Average:150 ms  Low:140 ms  High:180 ms  S2C: 0.1%  C2S: 0.0%  S2CWeapons: 0.0%
+
+
+*stat:
+
+Send:41799(2193)  Recv:8188(277)  RelOut:0.0  Multi:146.2  
+Iterations:305  Players:42  BillingRelOut:0  Wave:0  
+Screen:1599  Radar:597  Double:0  Timer:39  
+MemoryUsage:9664k  
+1:0(0)  2:0(0)  3:213(1)  4:2(0)  5:3007(142)  6:40(4)  7:141(7)   
+8:203(15)  9:326(21)  10:1(0)  15:107(0)  24:16(0)  31:288(2)  33:0(0)   
+40:33591(2065)  41:20(0)  46:740(46)  47:1(0)  49:0(0)  52:0(0)   
+53:37(10)  
+
+

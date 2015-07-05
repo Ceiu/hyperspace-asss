@@ -1,0 +1,82 @@
+$#module energyblanker
+
+
+$#arenadata static
+	int decoyBlankTime;
+$#endarenadata
+$#callback global CB_ARENAACTION
+void arenaaction(Arena *a, int action)
+{
+	if (action == AA_CREATE || action == AA_CONFCHANGED)
+	{
+		$usearenadata(ad, a);
+		ad->decoyBlankTime = cfg->GetInt(a->cfg, "EnergyBlanker", "DecoyBlankTime", 0);
+	}
+}
+$#endcallback
+
+
+$#playerdata static
+	int blank : 1;
+$#endplayerdata
+
+
+int unblank(void *_p)
+{
+	Player *p = (Player *)_p;
+	$useplayerdata(pdat, p);
+	pdat->blank = 0;
+	return 0; //do not repeat timer.
+}
+
+
+$#callback global CB_PPK
+void blankOnDecoy(Player *p, const struct C2SPosition *pos)
+{
+	$usearenadata(ad, p->arena);
+	if (ad->decoyBlankTime <= 0)
+		return;
+
+	if (pos->weapon.type == W_DECOY)
+	{
+		$useplayerdata(pdat, p);
+		ml->ClearTimer(unblank, p);
+		pdat->blank = 1;
+		ml->SetTimer(unblank, ad->decoyBlankTime, 0, p, p);
+	}
+}
+$#endcallback
+
+$#callback global CB_PLAYERACTION
+void playeraction(Player *p, int action, Arena *a)
+{
+	if (action == PA_LEAVEARENA || action == PA_DISCONNECT)
+	{
+		$useplayerdata(pdat, p);
+		pdat->blank = 0;
+		ml->ClearTimer(unblank, p);
+	}
+}
+$#endcallback
+
+$#adviser global A_PPK
+$null()
+int blockEnergyOnBlank(Player *src, Player *dest, struct C2SPosition *pos, int *extralen)
+{
+	if (dest->p_ship != SHIP_SPEC)
+	{
+		$useplayerdata(pdat, src);
+		if (pdat->blank)
+		{
+			*extralen = 0;
+			return TRUE;
+		}
+	} 
+	return FALSE;
+}
+$#endadviser
+
+
+$#unload first
+	ml->ClearTimer(unblank, NULL);
+$#endunload

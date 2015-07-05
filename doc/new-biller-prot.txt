@@ -1,0 +1,279 @@
+
+subspace billing server protocol proposal
+version 1.3.1
+grelminar@yahoo.com
+
+
+all communication goes over a single tcp socket. messages are lines,
+delimited by linefeed characters (ascii 10) (although servers and
+clients should accept CR, LF, and CRLF). fields within a message are
+delimited by colons (ascii 58). the first field is the type of the
+message. each type has a fixed number of fields to expect, so the last
+field can contain colons without confusing anything. integer values in
+fields should be in decimal. all lines will be no more than 1023
+characters in length (including LF). either side may discard lines
+longer than that length if it receives them.
+
+the game server will initiate a tcp connection to the billing server on
+the agreed port.
+
+(from now on, I'm going to get lazy, and call the game server "the
+server", and the billing server "the biller". i'll use g->b and b->g to
+describe the two directions.)
+
+the protocol is versioned with a three-part number (major revision,
+minor revision, patch). backwards compatbility is guaranteed when two
+version differ only by the patch number. when two versions differ by a
+major or minor revision number, all bets are off.
+
+the server sends the protocol version that it speaks to the biller. if
+the biller supports it (and everything else is ok), the biller can reply
+successfully and a connection is established. if the biller doesn't
+support the version requested (module the patch number), or if anything
+else is wrong with the login, it should return failure and close the
+connection. no further protocol version negociation takes places.
+
+
+::::: server login stuff
+
+to login:
+g->b: "CONNECT:version:swname:zonename:hostname:password"
+    version is the version of the protocol used. it should have three
+    numbers separated by dots (major, minor, patch). the current version
+    is at the top of this document.
+    swname is something idenifying the software used, like "asss 1.0.5".
+    zonename is the name of this zone, like "A Small Warzone".
+    hostname is where this zone is hosted, like "SSCX".
+    password is a password to authenticate this zone.
+
+the response will either be this:
+b->g: "CONNECTOK:swname:billername"
+    swname is something identifying the biller used, like "mybiller 0.29".
+    billername is a string identifying this biller network, like "SSC".
+or
+b->g: "CONNECTBAD:swname:billername:reason"
+    swname and billername are as above.
+    reason is something describing why the connection was refused, like
+    "bad password", or "wrong protocol version".
+
+the biller will most likely close the connection after sending a
+CONNECTBAD, but if it doesn't, the game server should.
+
+the rest can only be used after a successful connection.
+
+
+::::: player login stuff
+
+game sends:
+g->b: "PLOGIN:pid:flag:name:pw:ip:macid:contid"
+    pid is the player id assigned to this player by the server.
+    flag is 0 for a normal login, 1 for "i want to create a new player".
+    name is the name that's trying to log in.
+    pw is the password he's using.
+    ip is the address he's connecting from (in dotted decimal).
+    macid is the standard machine id of the player.
+    contid is the id data from continuum players. if the player isn't
+    using cont, it should be empty. if the player is using cont, it will
+    be the cont id, encoded in 128 characters, using plain hex encoding
+    with lowercase letters.
+
+biller responds with either:
+b->g: "POK:pid:rtext:name:squad:billerid:usage:firstused"
+    pid is the player id that was passed in PLOGIN.
+    rtext is additional text that can be delivered to the client. if
+    there are no complications logging in, it should be empty.
+    name is the name assigned by the biller (the biller can change the
+    name of a player if desired).
+    squad is the player's squad.
+    billerid is an id number assigned by the billing server.
+    usage is the number of seconds that this player has ever been
+    connected to this biller.
+    firstused is a string describing when this named account was
+    created, in roughly this form: "1-2-1999 6:13:35"
+or
+b->g: "PBAD:pid:newname:rtext"
+    pid is the player id passed in PLOGIN.
+    newname is 1 if the requested name doesn't exist in the biller's
+    database and is available for creation. it is 0 otherwise.
+    rtext is some text describing the reason this login was denied.
+
+
+::::: player registration (optional)
+
+_before_ sending a POK, the biller can request registration information
+by sending:
+b->g: "WANTREG:pid"
+    pid is the pid for which registration information is requested.
+
+the server may eventually respond:
+g->b: "REGDATA:pid:data"
+    pid is the pid of the player whose information is being submitted.
+    data is hex-encoded binary data containing the registration
+    information. the format or length of this data is not specified in
+    this document, and may be client-specific.
+
+
+::::: banners
+
+the biller can send this any any time, but will typically send it right
+after a PLOGINOK message:
+b->g: "BNR:pid:banner"
+    pid is the pid of the player setting his banner.
+    banner is a 96-byte banner, encoded using standard hex encoding with
+    lowercase letters, so it will be 192 bytes long.
+
+when a player sets his banner, the server will update the biller with:
+g->b: "BNR:pid:banner"
+    pid the the pid of the player setting his banner.
+    banner is the new banner, encoded as above.
+
+
+::::: player status changes
+
+when a player enters an arena for the first time after logging in, the
+server sends:
+g->b: "PENTERARENA:pid"
+
+
+when a player disconnects from the server, the server sends:
+g->b: "PLEAVE:pid"
+
+
+the biller can request that the server disconnect a player by sending:
+b->g: "PKICK:pid:reason"
+    pid is the pid of the player to be kicked.
+    reason is some text describing the reason the player was kicked.
+
+
+::::: messaging
+
+when a player sends a ?chat message, the server sends:
+g->b: "CHAT:pid:channel:sound:text"
+    pid is the sending player.
+    channel is the name of the channel. alternatively, it can be a
+    number signifying which of the player's channels the message is
+    intended for.
+    sound is a sound code, to be interpreted by the client.
+    text is the text of the message.
+
+when a player gets a ?chat message, the server receives:
+b->g: "CHATTXT:channel:sender:sound:text"
+b->g: "CHAT:pid:number"
+    channel is the name of the channel that this message is on.
+    sender is the name of the player who sent the message.
+    sound is a sound code.
+    text is the text of the message.
+    pid is the pid of a player who received the message.
+    number is what channel that player should see the message as coming
+    from.
+
+    the CHATTXT message is used so that the biller can send a chat
+    message to many players on one server without sending the full text
+    and sender name to each of them. the contents of the CHATTXT message
+    should be cached on the server, and the text used for any following
+    CHAT messages, until the next CHATTXT. for example, if the server
+    gets "CHATTXT:sscx:player:0:hello" and then "CHAT:22:3", player 22
+    should see something like "3:player> hello".
+
+
+when a player sends a remote private message:
+g->b: "RMT:pid:destination:sound:text"
+    pid is the pid of the sending player.
+    destination is the player the message is being sent to.
+    sound is a sound code.
+    text is the text of a message.
+
+when a player receives a remove private message:
+b->g: "RMT:pid:sender:sound:text"
+    pid is the pid of the player receiving the message.
+    sender is the name of the sending player.
+    sound is a sound code.
+    text is the text of the message.
+
+when a player sends a squad message:
+g->b: "RMTSQD:pid:destsquad:sound:text"
+    pid is the pid of the sender.
+    destsquad is the name of the squad whose players should receive the
+    message (no leading #).
+    sound is a sound code.
+    text is the text of the message.
+
+when a player receives a squad message:
+b->g: "RMTSQD:destsquad:sender:sound:text"
+    destsquad is the squad that the message is for.
+    sender is the name of the sending player.
+    sound is a sound code.
+    text is the text of the message.
+
+
+when a player types a command that the server doesn't interpret, or that
+the server knows should go to the billing server:
+g->b: "CMD:pid:cmdname:args"
+    pid is the pid of the sending player.
+    cmdname is the name of the command.
+    args is the arguments to the command (what was typed after the
+    command name.
+
+
+when the server wants to send a player some message (usually as the
+result of a command):
+b->g: "MSG:pid:sound:text"
+    pid is the pid of the recipient.
+    sound is a sound code.
+    text is the text of the message.
+
+
+when the server wants to send some of its log output to the biller,
+perhaps so logs document malicious activity can be gatherd and analyzed
+for many zones at once, it can send:
+g->b: "LOG:pid:logtext"
+    if the log message refers to the activity of a specific player, the
+    pid field will hold the pid of that player. if not, it should be
+    empty (zero-length).
+    logtext is the text of the log message, in whatever format the
+    server chooses.
+
+
+if the biller wants to send a message to only staff members of a zone,
+it can send:
+b->g: "STAFFMSG:sender:sound:text"
+    sender is the optional name of whoever sent this message. if it was
+    generated by the billing server, it should be empty.
+    sound is a sound code.
+    text is the text of the message.
+
+
+if the biller wants to send a message to the entire zone (e.g., for
+scheduled downtime or other important events), it can send:
+b->g: "BROADCAST:sender:sound:text"
+    sender is the optional name of whoever sent this message. if it was
+    generated by the billing server, it should be empty.
+    sound is a sound code.
+    text is the text of the message.
+
+
+if the server is going down (for a shutdown or whatever), it should
+close the tcp socket. if the biller is going down (for any reason), it
+should close the tcp socket.
+
+
+::::: misc.
+
+either side is allowed to send ping messages which act as a keepalive to
+force tcp to detect when one or the other side of the connection crashes
+or becomes unavailable. a suggested interval between pings is 180
+seconds, although neither side should assume anything about the interval
+that the other side is using, and should send its own keepalives if it
+wants quick notification if the other side crashes or becomes
+unavailable.
+
+b->g: "PING"
+g->b: "PING"
+
+
+the biller can indicate that it's time for a scorereset by sending:
+b->g: "SCORERESET"
+
+
+# dist: public
+

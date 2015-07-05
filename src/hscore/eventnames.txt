@@ -1,0 +1,11 @@
+death
+kill
+//spawn
+init
+buy
+sell
+add
+del
+datazero
+transwarp
+dontbrick

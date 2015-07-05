@@ -1,0 +1,27 @@
+icq to Mr. Ekted, Mon May 13 19:54:30 2002:
+
+oh, i haven't tried thinking of one. let me try...
+
+ok, the main factor that determines when you have to resend a sent
+packet and when to skip it is time since it was sent last. so: let d be
+the resend delay. let n be the number of outgoing queues you want. i
+think 10-20 might work with this scheme. set up n outgoing queues, and
+keep track of a "current queue" in a variable. also keep track of the
+last time you started scanning.
+
+now, each time you scan, check the time since you last scanned is
+greater than d/n. if so, increment the current queue pointer, mod n, and
+resend all of the packets in that queue, with no checking. if not, wait
+a bit and try again.
+
+when you want to add send a reliable packet, send the first try on the
+spot, and then append it to the current queue (with appropriate
+locking).
+
+this depends on the time taken for one pass through one queue to take
+less than d/n. n might have to be adjusted to make that true.
+
+the should reduce the amount of entries you have to look at by a factor
+of n, and also eliminate most checking of times. of course, you lose a
+bit of accuracy since you're basically lumping lots of packets together
+in the same time chunk.

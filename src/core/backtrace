@@ -1,0 +1,20 @@
+#!/bin/sh
+# dist: public
+
+EXE=$1
+PID=$2
+TYPE=$3
+TMP=gdbcmds.$$.tmp
+DATE=$(date +%Y%m%d-%H%M%S)
+
+mkdir -p bt
+exec >bt/$DATE-$TYPE-$PID.bt 2>&1
+
+echo >$TMP '
+set height 0
+thread apply all bt full
+quit
+'
+
+gdb -batch -x $TMP $EXE $PID </dev/null
+rm -f $TMP

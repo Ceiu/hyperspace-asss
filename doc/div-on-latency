@@ -1,0 +1,266 @@
+
+from aswz.net forums, by divine.216
+
+--------------------------------------------------------------------------------
+
+I finally took a few minutes to sit down and take a crack at fixing the
+latency settings in the public arena.  The servers latency settings are
+more numerous than one might probably imagine.  While this is a good thing
+because it allows for a more articulate definition and control of latency,
+it also makes the modification of the settings something more of a pain.
+
+The following is my interpretation of what the latency settings do/stand for,
+and I made adjustments to them accordingly.  We will see how well my
+interpretations live up in the next few weeks of play.
+
+First, a few terms:
+
+Latency 
+- The amount of time it takes to send data from one side to another.
+There are two types of Latency, server to client (S2C) and client to
+server (C2S).  This time is measured in milliseconds (ms).
+
+SlowPacket
+- This is the term used to describe a packet that fails the server
+defined definition of a packet that is "too" latent, that is, takes
+too long to reach its destination.
+
+PacketLoss
+- Packetloss is defined as the fraction of packets sent for which there
+is no acknowledgment of receipt.  This includes packets that are not
+received by the destination as well as acknowledgments that are lost
+before returning to the original sender.
+
+The server allows for two basic methods of enforcing latency
+restrictions: SlowPacket restrictions, and PacketLoss restrictions.
+
+First, we're going to go over SlowPackets.
+
+The standard server latency settings basically consist of the
+definitions of SlowPacket's, both C2S and S2C, and then the
+definitions of how long the C2S packets can be SlowPacket's
+before doing something about it (namely: Kicking them).
+The definition of the C2S SlowPacket is found in the following
+
+Latency:SlowPacketTime
+
+This setting specifies a number of milliseconds, if the packet in
+question takes more than that number of milliseconds to go from
+the client to the server, then it is to be considered a SlowPacket.
+The comprable S2C setting is
+
+Latency:ClientSlowPacketTime
+
+Now that we have defined the C2S and S2C SlowPacket's, we can decide
+just how strict we will be with those who's packets violate this
+definition.
+
+The definition of this strictness consists of two settings for
+each latency type (C2S and S2C).  The first setting is a percentage
+which defines the maximum percentage of the packets that can be
+SlowPackets before the player is kicked.  The second setting is a
+sample size which defines how many packets to sample before
+checking for the previously defined percentage.
+The C2S setting for the percentage is
+
+Latency:SlowPacketKickoutPercent
+
+and the S2C is
+
+Latency:ClientSlowPacketKickoutPercent
+
+This percentage is defined as a number from 0 to 1000, so
+500 would be 50%, 20 would be 2% etc.
+
+The C2S setting for the sample size is
+
+Latency:SlowPacketSampleSize
+
+and the S2C is
+
+Latency:ClientSlowPacketSampleSize
+
+
+Now lets take a look at how I have the settings in ASWZ public
+arena's:
+
+
+Latency:ClientSlowPacketTime           = 175
+Latency:SlowPacketTime                 = 175
+Latency:SlowPacketKickoutPercent       = 90
+Latency:ClientSlowPacketKickoutPercent = 90
+Latency:SlowPacketSampleSize           = 125
+Latency:ClientSlowPacketSampleSize     = 125
+
+Lets see what these numbers represent.
+As you can see, I defined the C2S latency settings to be
+exactly the same as the S2C latency settings.  We can argue
+about the legitimacy of this policy later, but it if nothing
+else it is convenient for our analysis.
+
+The SlowPacket time is 175.  This means that if it takes
+175ms for the packet to go from one side to the other, then
+it will be called a SlowPacket.  To get an indication about
+how long it takes to go both ways (C2S and S2C), round-trip,
+a fairly good indicator (I assume) would be your ping time.
+Simply divide your ping time by 2 and, assuming you don't have
+one sided latency (a rather large assumption), this should
+give you a very general indication of your latency.
+Working with the assumption that you have fairly balanced latency
+(again a very large assumption) if you have a ping time of 350,
+then, according to our assumption, your C2S latency would be 175
+and your S2C latency would be another 175 (this is what we ment by
+having balanced latency).
+
+The SlowPacketKickoutPercent is set to 90, which corresponds to
+9.0%.  The SlowPacketSampleSize is 125.  Put these two settings
+together with the first setting and we come to understand that these
+settings would establish rules such that:
+
+If in a pool of 125 packets, more than 9.0% (~11 packets) of them take more than
+175ms to get to their destination, you will be kicked.
+
+Now that we've pretty thoroughly described how to use SlowPacket
+restrictions, the PacketLoss restrictions are much simpler.
+
+The PacketLoss restrictions are basically comprised of 4 settings.
+The first setting defines the packetloss percentage C2S before
+being kicked.  The second setting does this for S2C.  The third
+setting defines the adjustment in this percentage to give to a
+player in spectator mode (the idea being that if you are in spec
+you are allowed to have more packetloss).  The fourth setting allows
+you to disable players weapons for high packetloss 
+
+The first setting is
+
+PacketLoss:C2SKickOutPercent
+
+this setting defines the minimum percent of packets that must get through
+in else the player is kicked.  It is in the form used earlier, 0-1000, so
+a value of 950 would define a maximum C2S packetloss of 5%.
+The comprable S2C setting is
+ 
+PacketLoss:S2CKickOutPercent
+
+The third setting is
+
+PacketLoss:SpectatorPercentAdjust
+
+this is the percent to subtract from the
+previously defined KickOutPercent's.
+
+The fourth setting is simply
+
+PacketLoss:PacketLossDisableWeapons
+
+it is set to 0 or 1, on or off respectively.
+
+(NOTE: I am not sure how high is "high" for the fourth setting, I
+       can't piece together a reasonable guess for it.  The only 
+       percent that we define is the kickout percent, but if it used
+       that percent... would make no sense.)
+
+Here are the PacketLoss settings in ASWZ Public arena:
+
+PacketLoss:C2SKickOutPercent=920
+PacketLoss:S2CKickOutPercent=920
+PacketLoss:SpectatorPercentAdjust=500
+PacketLoss:PacketLossDisableWeapons=1
+
+This corresponds to a max C2S packetloss of 8% and a
+max S2C packetloss of 8%.  In spectator mode you can
+have 58% packetloss.  If you have "high" packetloss,
+your weapons will be disabled.
+
+Now that I've completed my summary of the two topics I
+introduced at the beginning, let me add another description
+to this.
+
+The first addition is a setting which allows you to specify
+a maximum latency before disabling a players weapons.  This
+setting is
+
+Latency:MaxLatencyForWeapons
+
+The second addition is a setting which allows you to specify
+a maximum latency time for prize packets before discarding them.
+This setting is
+
+Latency:MaxLatencyForPrizes
+
+The third addition is a setting which allows you to specify a
+maximum latency time before you are kicked out.  This setting is
+
+Latency:MaxLatencyForKickOut
+
+The fourth addition simply defines how long the
+MaxLatencyForKickout must be exceeded before kicking.  This setting
+is
+
+Latency:LatencyKickOutTime
+
+
+A fifth addition is a setting that allows you to specify a length
+of time a user can receive no data from the server before disconnecting.
+This setting is
+
+Latency:S2CNoDataKickoutDelay
+
+A sixth addition lets you define how much data to send per second before
+cutting back on non-critical data.  This is important hardware has
+physical limitations on how much data it can handle per second.  If this
+threshold is surpassed, the person will suffer significant packetloss.
+
+Latency:CutbackWatermark
+
+The seventh and eigth settings are new, they allow you to define a 
+max length of time during which no data can be received from a client,
+if this max length of time is surpassed, an action is performed.
+The seventh setting defines the length of time, it is
+
+Latency:C2SNoDataTime
+
+this setting is in 10ms, so 700 would correspond to 7000ms (7 seconds).
+
+The eigth setting defines the actions to take when the time is surpassed,
+it is 
+
+Latency:C2SNoDataAction
+
+this setting takes a value from 0 through 7.  The value consists of
+adding the values of the actions to perform together:
+1 - Display Sysop Warning
+2 - Spec Player
+4 - Kick Player
+Add up the values of the events to perform, so if you wanted to display
+the sysop warning and kick the player, you would add 1 and 4 to get 5, so
+you would set Latency:C2SNoDataAction equal to 5.
+
+
+In ASWZ pub, these settings have been set to
+
+Latency:MaxLatencyForWeapons=175
+Latency:MaxLatencyForPrizes=175
+Latency:MaxLatencyForKickOut=175
+Latency:LatencyKickOutTime=1200
+Latency:S2CNoDataKickoutDelay=1000
+Latency:CutbackWatermark=3500
+Latency:C2SNoDataTime=200
+Latency:C2SNoDataAction=3
+
+To quickly translate:
+If you take more than 175ms to send data, your weapons will be
+disabled.  If you don't get a prize packet within 175ms
+you won't ever get it.  If you take more than 175ms to send data consistently
+for 1.2 seconds, you will be kicked.  If you receive no data from the server
+for 1 second you will be kicked.  If you are in a crowded region or for some
+other reason need to receive more than 3500 bytes of data per second, the
+server will remove non-critical data from the send.  If you don't send any
+data to the server for 2 seconds the sysop will receive a pretty red message
+detailing your status as scum of the earth, and you will be sent to spec.
+
+Whew... well there you have it, as I said earlier, this is how I pieced
+together the doc with some help from other ops.  I will be keeping a close
+eye on how the settings actually end up functioning and have no reluctance
+to tweak them as needed.
+

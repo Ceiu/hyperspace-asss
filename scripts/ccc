@@ -1,0 +1,1635 @@
+#!/usr/bin/env python
+# ccc - a console chat client for asss <grelminar@yahoo.com>
+# dist: public
+
+ccc_version = '2.6'
+
+import sys, time, curses, socket, select, os
+
+ship_names = \
+{
+	0: 'Warbird',
+	1: 'Javelin',
+	2: 'Spider',
+	3: 'Leviathan',
+	4: 'Terrier',
+	5: 'Weasel',
+	6: 'Lancaster',
+	7: 'Shark',
+	8: 'Spectator'
+}
+
+biller_reconnect_msg = 'notice: connection to user database server restored.'
+
+automkwin_default = 1
+
+class MyWindows:
+	def __init__(me):
+		me.stdscr = me.twin = me.iwin = me.pwin = None
+
+
+class View:
+	def __init__(me, name, prefix = ''):
+		me.name = name
+		me.text = Text()
+		me.edit = Edit()
+		me.players = PlayerList()
+		me.prefix = prefix
+		me.scrollback = 0
+		me.newcrap = 0
+
+		add_line('Window: %s' % me.name, view = me, setnewcrap = 0, no_all_view = 1)
+
+	def display(me, wins):
+		# draw lines
+		h, w = wins.stdscr.getmaxyx()
+		wins.stdscr.hline(h-editheight-1, 0, curses.ACS_HLINE, w)
+		if pwidth:
+			wins.stdscr.vline(0, w-pwidth-1, curses.ACS_VLINE, h-editheight-1)
+			wins.stdscr.addch(h-editheight-1, w-pwidth-1, curses.ACS_BTEE)
+			if len(views) > 2:
+				wins.stdscr.addch(h-editheight-len(views)-2, w-pwidth-1, curses.ACS_LTEE)
+		wins.stdscr.noutrefresh()
+
+		# then draw this stuff
+		me.text.display(wins.twin, me)
+		me.players.display(wins.pwin)
+		display_view_list(wins.pwin)
+		# edit box last so the cursor shows up there
+		me.edit.display(wins.iwin)
+
+# the naming of views determines what messages go where, so these
+# functions have to agree on the naming conventions.
+
+def make_arena_view():
+	return View('messages', '')
+
+def make_all_view():
+	return View('all', '')
+
+def make_mod_view():
+	return View('mod chat', '\\')
+
+def make_chat_view(num, name):
+	if name:
+		return View('chat %d (%s)' % (num, name), ';%d;' % num)
+	else:
+		return View('chat %d' % (num), ';%d;' % num)
+
+def make_priv_view(name):
+	return View('priv %s' % name, ':%s:' % name)
+
+def find_named_view(n):
+	for v in views:
+		if v.name == n:
+			return v
+
+def find_arena_view():
+	return find_named_view('messages')
+
+def find_all_view():
+	return find_named_view('all')
+
+def find_primary_view():
+	v = find_all_view()
+	if v: return v
+	v = find_arena_view()
+	if v: return v
+
+def find_mod_view():
+	for v in views:
+		if v.name == 'mod chat':
+			return v
+	if opts.get('automkwin', automkwin_default):
+		v = make_mod_view()
+		i = views.index(find_primary_view())
+		if i == 0:
+			views.append(v)
+		else:
+			views.insert(i, v)
+		return v
+
+def find_chat_view(num, chat_name = '', noauto = 0):
+	name = 'chat %d' % num
+	for v in views:
+		if v.name.startswith(name):
+			return v
+	if not noauto and opts.get('automkwin', automkwin_default):
+		v = make_chat_view(num, chat_name)
+		# try to insert in order
+		pnum = num
+		while pnum > 1:
+			pnum -= 1
+			pv = find_chat_view(pnum, noauto = 1)
+			if pv:
+				i = views.index(pv) + 1
+				break
+		else:
+			if num == 1:
+				i = views.index(find_primary_view()) + 1
+			else:
+				i = views.index(find_primary_view())
+		if i == 0:
+			views.append(v)
+		else:
+			views.insert(i, v)
+		return v
+
+def find_priv_view(name):
+	vname = ('priv %s' % name).lower()
+	for v in views:
+		if v.name.lower() == vname:
+			return v
+	if opts.get('automkwin', automkwin_default):
+		v = make_priv_view(name)
+		i = views.index(find_primary_view())
+		if i == 0:
+			views.append(v)
+		else:
+			views.insert(i, v)
+		return v
+
+def display_view_list(scr):
+	if not scr or len(views) < 2:
+		return
+
+	h, w = scr.getmaxyx()
+
+	y = h-len(views)
+	scr.hline(y-1, 0, curses.ACS_HLINE, w)
+	color = colors.pl_selected
+	for v in views:
+		if y >= h: break
+		if v.newcrap:
+			txt = '!' + v.name
+		else:
+			txt = ' ' + v.name
+		scr.addstr(y, 0, txt[:w-1], color)
+		color = colors.pl_player
+		y = y + 1
+
+	scr.noutrefresh()
+
+
+class Bindings:
+	def __init__(me):
+		me.bindings = {}
+
+		me.yes = 1
+		me.no = 0
+		me.true = 1
+		me.false = 0
+
+	def bind(me, seq, func, *args):
+		if type(seq) == type(''):
+			for c in range(1, 32):
+				seq = seq.replace('^%c' % (c + ord('A') - 1), '%c' % c)
+			seq = seq.replace('\\e', chr(27))
+			seq = seq.replace('\\E', chr(27))
+			seq = map(ord, seq)
+		if type(seq) == type(0):
+			seq = [seq]
+		if type(seq) == type([]):
+			seq = tuple(seq)
+
+		def realfunc(func = func, args = args):
+			func(*args)
+
+		me.bindings[seq] = realfunc
+
+	def getbinding(me, seq):
+		if type(seq) == type(''):
+			seq = map(ord, seq)
+		seq = tuple(seq)
+		return me.bindings.get(seq)
+
+
+	# the possible functions
+	def finish_line(me):
+		edit = views[0].edit
+		l = edit.gettext()
+		edit.cleartext()
+		if l:
+			process_typed(views[0].prefix, l)
+
+	def kill_line(me):
+		views[0].edit.cleartext()
+
+	def backspace(me):
+		views[0].edit.backspace()
+
+	def delete(me):
+		views[0].edit.delete()
+
+	def curs_left(me):
+		views[0].edit.curs_left()
+
+	def curs_right(me):
+		views[0].edit.curs_right()
+
+	def curs_up(me):
+		views[0].edit.curs_up()
+
+	def curs_down(me):
+		views[0].edit.curs_down()
+
+	def curs_home(me):
+		views[0].edit.curs_home()
+
+	def curs_end(me):
+		views[0].edit.curs_end()
+
+	def scroll_up(me, lines = 1):
+		views[0].scrollback += lines
+
+	def scroll_down(me, lines = 1):
+		views[0].scrollback -= lines
+		if views[0].scrollback < 0:
+			views[0].scrollback = 0
+
+	def player_select_up(me):
+		views[0].players.move_select_up()
+
+	def player_select_down(me):
+		views[0].players.move_select_down()
+
+	def sort_player_list(me):
+		views[0].players.set_sort()
+
+	def rotate_view(me, rot = None):
+		if rot is None:
+			for idx in range(1, len(views)):
+				if views[idx].newcrap:
+					rot = idx
+					break
+			else:
+				rot = 1
+		views[:] = views[rot:] + views[:rot]
+
+
+class Line:
+	def __init__(me, msg, color, tm = 0):
+		me.msg = msg.expandtabs()
+		me.color = color
+		if tm == 0:
+			me.time = time.time()
+		else:
+			me.time = tm
+
+		me.lastopts = None
+		me.lastres = None
+
+	def halfdayid(me):
+		return time.strftime('[%a %b %d %p]', time.localtime(me.time))
+
+	def wordbreak(me, width, showtime = 0, indent = 2):
+		if me.time is None:
+			showtime = 0
+
+		if me.lastopts != (width, showtime, indent):
+			me.lastopts = (width, showtime, indent)
+
+			istr = ' ' * indent
+			words = me.msg.split(' ')
+			lines = []
+			if showtime:
+				cl = time.strftime('[%I:%M]', time.localtime(me.time))
+			else:
+				cl = ''
+
+			idx = 0
+			while idx < len(words):
+				w = words[idx]
+				if len(cl) + 1 + len(w) <= width:
+					# fits on current line
+					if cl and cl is not istr: cl += ' '
+					cl += w
+					idx += 1
+				elif len(w) <= (width - indent):
+					# fits on next line
+					lines.append(cl)
+					cl = ' '*indent + w
+					idx += 1
+				else:
+					# has to be split
+					if cl and cl is not istr: cl += ' '
+					i = width - len(cl)
+					cl += w[:i]
+					lines.append(cl)
+					cl = istr
+					words[idx] = w[i:]
+
+			# append last partial line
+			lines.append(cl)
+
+			me.lastres = lines
+
+		return me.lastres
+
+
+class Text:
+	def __init__(me):
+		me.lines = []
+
+	def lastline(me):
+		if not me.lines:
+			return None
+		else:
+			return me.lines[-1]
+
+	def addline(me, l):
+		me.lines.append(l)
+		if len(me.lines) > keeplines:
+			me.lines = me.lines[-keeplines:]
+
+	def display(me, scr, view):
+		# get window size
+		h, w = scr.getmaxyx()
+
+		rlines = []
+		# only work on the last h lines
+		for l in me.lines[-(h+view.scrollback):]:
+			rlines.extend(map(lambda ln: (ln, l.color),
+				l.wordbreak(w-1, showtime, indent)))
+		rlines.reverse()
+		# go that many lines up
+		if view.scrollback >= len(rlines):
+			view.scrollback = len(rlines) - 1
+		scrollmark = (len(rlines)-1-view.scrollback)*(h-2)/(len(rlines))+1
+		rlines = rlines[view.scrollback:]
+		# and cut to the top of the window
+		rlines = rlines[:h]
+
+		# draw them
+		y = h - 1
+		scr.erase()
+		for l, c in rlines:
+			scr.addstr(y, 0, l, c)
+			y = y - 1
+
+		if view.scrollback < view.newcrap:
+			view.newcrap = view.scrollback
+
+		# display the "%d more" message at the bottom of the window
+		if view.newcrap:
+			s = '%d more' % view.newcrap
+			scr.addstr(h-1, w-len(s)-1, s, curses.A_REVERSE)
+
+		if not sock and last_login_try:
+			s = 'reconnecting in %d' % int(login_retry_time - (time.time() - last_login_try) + 0.5)
+			scr.addstr(h-2, w-len(s)-1, s, curses.A_REVERSE)
+
+		if view.scrollback:
+			for i in range(1, h-1):
+				scr.addch(i, w-1, curses.ACS_CKBOARD)
+			scr.addch(scrollmark, w-1, curses.ACS_BULLET)
+			# note, don't seem to be able to
+			# scr.addstr(h-1,w-1,'A',curses.A_REVERSE)
+			# it causes curses error.
+
+		s = '%d lines' % len(me.lines)
+		scr.addstr(0, w-len(s), s, curses.A_REVERSE)
+
+		scr.noutrefresh()
+
+
+class Edit:
+	def __init__(me):
+		me.line = []
+		me.i = 0
+		me.lastw = 0
+		me.lastmax = 0
+
+	def display(me, scr):
+		h, w = scr.getmaxyx()
+		me.lastw = w
+		me.lastmax = w * h - 1
+		if len(me.line) > me.lastmax:
+			me.line = me.line[:me.lastmax]
+		if me.i > me.lastmax:
+			me.i = me.lastmax
+		scr.erase()
+		for c in me.line:
+			scr.addch(c)
+		scr.move(me.i / w, me.i % w)
+		scr.noutrefresh()
+
+	def gettext(me):
+		return ''.join(map(chr, me.line))
+
+	def is_double_colons(me):
+		colon = ord(':')
+		if not me.line or me.line[0] != colon:
+			return 0
+		if me.line[-1] == colon:
+			return colon not in me.line[1:-1]
+		else:
+			return colon not in me.line[1:]
+
+	def cleartext(me):
+		me.__init__()
+
+	def set_text(me, txt):
+		me.line = map(ord, txt)
+		# clip to max length
+		me.line = me.line[0:me.lastmax]
+		me.i = len(me.line)
+
+	def get_text(me):
+		return ''.join(map(chr, me.line))
+
+	def backspace(me):
+		if me.i > 0:
+			me.line = me.line[:me.i-1] + me.line[me.i:]
+			me.i -= 1
+
+	def delete(me):
+		if me.i < len(me.line):
+			me.line = me.line[:me.i] + me.line[me.i+1:]
+
+	def curs_left(me):
+		if me.i > 0:
+			me.i -= 1
+
+	def curs_right(me):
+		if me.i < len(me.line):
+			me.i += 1
+
+	def curs_up(me):
+		if me.i > me.lastw:
+			me.i -= me.lastw
+
+	def curs_down(me):
+		if me.i + me.lastw <= len(me.line):
+			me.i += me.lastw
+
+	def curs_home(me):
+		me.i = 0
+
+	def curs_end(me):
+		me.i = len(me.line)
+
+	def insert(me, ch):
+		if len(me.line) < me.lastmax:
+			me.line.insert(me.i, ch)
+			me.i += 1
+
+
+class Player:
+	def __init__(me, name, freq):
+		me.name = name
+		me.freq = freq
+
+
+class PlayerList:
+
+	SORT_NONE = 0
+	SORT_NAME = 1
+	SORT_TEAM = 2
+
+	def __init__(me):
+		me.data = {}
+		me.pos = 0
+		me.offset = 0
+		me.sorthow = PlayerList.SORT_NAME
+		me.sorted = []
+		me.sort()
+
+	def clear(me):
+		me.data = {}
+		me.pos = 0
+		me.offset = 0
+		me.sort()
+
+	def sort(me):
+		# remember last selected player so we can select it again
+		oldsel = me.get_selected()
+
+		# created a sorted list
+		if me.sorthow == PlayerList.SORT_NONE:
+			me.sorted = me.data.values()
+		elif me.sorthow == PlayerList.SORT_NAME:
+			def mycmp(a, b):
+				return cmp(a.name.lower(), b.name.lower())
+			me.sorted = me.data.values()
+			me.sorted.sort(mycmp)
+		elif me.sorthow == PlayerList.SORT_TEAM:
+			def mycmp(a, b):
+				return 2 * cmp(a.freq, b.freq) + cmp(a.name.lower(), b.name.lower())
+			tmp = me.data.values()
+			tmp.sort(mycmp)
+
+			# insert freq headers
+			me.sorted = []
+			lastfreq = -1
+			for p in tmp:
+				if p.freq != lastfreq:
+					me.sorted.append('--- freq %d' % p.freq)
+					lastfreq = p.freq
+				me.sorted.append(p)
+		else:
+			me.sorted = []
+
+		# try to select old selection, or if not, first real player in
+		# list
+		me.pos = -1
+		idx = 0
+		for p in me.sorted:
+			if p is oldsel:
+				me.pos = idx
+				break
+			if me.pos == -1 and type(p) != type(''):
+				me.pos = idx
+			idx = idx + 1
+
+	def move_select_up(me):
+		oldpos = me.pos
+		me.pos = me.pos - 1
+		while me.pos >= 0 and type(me.sorted[me.pos]) == type(''):
+			me.pos = me.pos - 1
+		if me.pos < 0:
+			me.pos = oldpos
+
+	def move_select_down(me):
+		oldpos = me.pos
+		me.pos = me.pos + 1
+		while me.pos < len(me.sorted) and type(me.sorted[me.pos]) == type(''):
+			me.pos = me.pos + 1
+		if me.pos >= len(me.sorted):
+			me.pos = oldpos
+
+	def get_selected(me):
+		if me.pos >= 0 and \
+		   me.pos < len(me.sorted) and \
+		   type(me.sorted[me.pos]) != type(''):
+			return me.sorted[me.pos]
+		else:
+			return None
+
+	def set_sort(me, sort = None):
+		if sort is not None:
+			me.sorthow = sort
+		elif me.sorthow == PlayerList.SORT_NAME:
+			me.sorthow = PlayerList.SORT_TEAM
+		else:
+			me.sorthow = PlayerList.SORT_NAME
+		me.sort()
+
+	def add(me, player):
+		me.data[player.name] = player
+		me.sort()
+
+	def remove(me, name):
+		del me.data[name]
+		me.sort()
+
+	def sfc(me, name, ship, freq):
+		try:
+			player = me.data[name]
+		except:
+			add_line("Unknown player name in ship change: '%s'" % name)
+			return
+
+		player.ship = ship
+		player.freq = freq
+		me.sort()
+
+	def display(me, scr):
+		if not scr: return
+
+		h, w = scr.getmaxyx()
+		scr.erase()
+
+		# account for the view list
+		if len(views) > 1:
+			h -= len(views)+1
+
+		# update the scroll offset
+		if me.pos < me.offset:
+			me.offset = me.pos
+		elif me.pos > (me.offset + h - 1):
+			me.offset = me.pos - h + 1
+		if me.offset >= len(me.sorted):
+			me.offset = len(me.sorted) - 1
+		if me.offset < 0:
+			me.offset = 0
+
+		if len(me.data) == 1:
+			msg = '1 player'
+		else:
+			msg = '%d players' % len(me.data)
+		msg = (msg + ' ' * w)[:w]
+		scr.addstr(0, 0, msg, colors.pl_txt | curses.A_REVERSE)
+
+		y = 1
+		for thing in me.sorted[me.offset:]:
+			if y >= h: break
+			if type(thing) == type(''):
+				scr.addstr(y, 0, thing[:w], colors.pl_txt)
+			else:
+				color = colors.pl_player
+				if (y - 1 + me.offset) == me.pos:
+					color = colors.pl_selected
+				scr.addstr(y, 0, thing.name[:w], color)
+			y = y + 1
+
+		scr.noutrefresh()
+
+
+class LastPrivList:
+	def __init__(me, max = 5):
+		me.list = []
+		me.index = 0
+		if not max:
+			me.max = 5
+		else:
+			me.max = max
+
+	def add(me, name):
+		while name in me.list:
+			me.list.remove(name)
+		me.list[0:0] = [name]
+		me.list = me.list[:me.max]
+
+	def get(me, start = None):
+		if start is not None:
+			me.index = start
+		if me.list:
+			r = me.list[me.index]
+			me.index = (me.index + 1) % len(me.list)
+			return r
+		else:
+			return ''
+
+
+class ChatParser:
+	def __init__(me):
+		me.expires = 0
+
+	def reset(me):
+		me.expires = time.time() + 5.0
+		me.lastchatname = None
+		me.idx = 0
+		for v in views:
+			if v.name.startswith('chat '):
+				v.players.clear()
+
+	def line(me, line):
+		if time.time() > me.expires:
+			return
+
+		try:
+			chat, names = line.split(': ')
+			names = names.split(',')
+			if chat != me.lastchatname:
+				me.lastchatname = chat
+				me.idx += 1
+
+			view = find_chat_view(me.idx)
+			if view:
+				view.name = 'chat %d (%s)' % (me.idx, chat)
+				for n in names:
+					view.players.add(Player(n, 0))
+		except:
+			pass
+
+
+class Colors:
+	def __init__(me):
+		from curses import init_pair, color_pair, A_BOLD, A_REVERSE, COLORS, COLOR_PAIRS
+
+		me.colors = COLORS
+		me.pairs = COLOR_PAIRS
+
+		for c in range(1, me.pairs):
+			init_pair(c, c % COLORS, 0)
+
+		me.default = color_pair(0)
+		me.info = color_pair(14 % me.pairs) | A_BOLD
+		me.date = color_pair(6 % me.pairs)
+		me.arena = color_pair(10 % me.pairs) | A_BOLD
+		me.pub = color_pair(15 % me.pairs)
+		me.priv = color_pair(2)
+		me.squad = me.priv
+		me.rempriv = color_pair(10 % me.pairs)
+		me.freq = color_pair(11 % me.pairs) | A_BOLD
+		me.chat = color_pair(9 % me.pairs)
+		me.mod = color_pair(12 % me.pairs)
+		me.sysop = color_pair(9 % me.pairs) | A_BOLD
+		me.kill = color_pair(5 % me.pairs)
+
+		me.pl_txt = color_pair(11 % me.pairs) | A_BOLD
+		me.pl_player = color_pair(7 % me.pairs)
+		me.pl_selected = color_pair(7 % me.pairs) | A_REVERSE
+
+		# add colors that we couldn't do before
+		global deferred_color_args
+		for args in deferred_color_args:
+			me.set_color(*args)
+		del deferred_color_args
+
+	def set_color(me, name, num, bold = 0):
+		if bold:
+			setattr(me, name, curses.color_pair(num) | curses.A_BOLD)
+		else:
+			setattr(me, name, curses.color_pair(num))
+
+
+class IgnoreList:
+	def __init__(me):
+		me.ignored = {}
+
+	def add(me, name):
+		name = name.lower()
+		if not me.ignored.has_key(name):
+			me.ignored[name] = 0
+			return 1
+
+	def remove(me, name):
+		name = name.lower()
+		if me.ignored.has_key(name):
+			del me.ignored[name]
+			return 1
+
+	def checkignored(me, name):
+		name = name.lower()
+		if me.ignored.has_key(name):
+			me.ignored[name] += 1
+			return 1
+
+	def __str__(me):
+		if not me.ignored:
+			return "ignore list empty"
+		else:
+			s = []
+			for name, count in me.ignored.iteritems():
+				if count == 1:
+					s.append('%s (1 msg)' % name)
+				else:
+					s.append('%s (%d msgs)' % (name, count))
+			return 'ignore list: ' + ', '.join(s)
+
+
+def init_logfile(fname):
+	global logfile, original_log_filename
+	import os.path
+
+	original_log_filename = fname
+
+	if not fname:
+		logfile = 0
+		return
+
+	# support ~/ and strftime macros in the logfile setting
+	fname = os.path.expanduser(fname)
+	fname = time.strftime(fname)
+
+	# if we're opening the same thing again, don't bother
+	try:
+		if logfile and logfile.name == fname:
+			return
+	except:
+		pass
+
+	try:
+		logfile = open(fname, 'a', 1)
+		add_line("Logging to file %s" % fname)
+	except:
+		logfile = 0
+		add_line("Can't open '%s'. Logging disabled." % fname)
+
+def reload_logfile():
+	init_logfile(original_log_filename)
+
+def try_load_log_history():
+	import re
+
+	log_line_re = re.compile('(.{24}) ([A-Z]) (.*)')
+
+	colormap = {}
+	for k, v in globals().iteritems():
+		if k.startswith('L_'):
+			colormap[v] = getattr(colors, k[2:].lower(), colors.default)
+
+	if not logfile:
+		return
+
+	for line in open(logfile.name, 'r').readlines():
+		m = log_line_re.match(line)
+		if not m: continue
+		tm, tp, txt = m.groups()
+		tm = time.mktime(time.strptime(tm, '%a %b %d %H:%M:%S %Y'))
+		color = colormap.get(tp, colors.default)
+		lineobj = Line(txt, color, tm)
+		view = None
+		# only handle diverting history to chat views and mod chat.
+		# don't try to recreate private message views, even if automkwin
+		# is on.
+		if tp == L_CHAT:
+			chatno, _ = txt.split(':', 1)
+			chatno = int(chatno)
+			view = find_chat_view(chatno)
+		elif tp == L_MOD:
+			view = find_mod_view()
+		if not view:
+			view = views[0]
+		lastline = view.text.lastline()
+		if lastline and lastline.halfdayid() != lineobj.halfdayid():
+			dateline = Line(lineobj.halfdayid(), colors.date, tm = None)
+			view.text.addline(dateline)
+		view.text.addline(lineobj)
+
+
+# log types
+L_CMD = 'D'
+L_INFO = 'I'
+L_ARENA = 'A'
+L_PUB = 'P'
+L_PRIV = 'V'
+L_SQUAD = 'Q'
+L_REMPRIV = 'R'
+L_FREQ = 'T' # team
+L_CHAT = 'C'
+L_MOD = 'M'
+L_SYSOP = 'W' # warn
+L_KILL = 'K'
+
+def log(type, text):
+	if not logfile:
+		return
+	line = (time.ctime(), ' ', type, ' ', text, '\n')
+	line = ''.join(line)
+	logfile.write(line)
+
+
+def start_curses():
+	wins.stdscr = curses.initscr()
+	curses.cbreak()
+	curses.noecho()
+	curses.nonl()
+	wins.stdscr.keypad(1)
+	wins.stdscr.nodelay(1)
+	curses.start_color()
+	init_wins()
+
+
+def init_wins():
+	h, w = wins.stdscr.getmaxyx()
+
+	wins.iwin = curses.newwin(editheight, w, h-editheight, 0)
+
+	if pwidth:
+		wins.twin = curses.newwin(h-editheight-1, w-pwidth-1, 0, 0)
+		wins.pwin = curses.newwin(h-editheight-1, pwidth, 0, w-pwidth)
+	else:
+		wins.twin = curses.newwin(h-editheight-1, w, 0, 0)
+
+
+def end_curses():
+	wins.stdscr.keypad(0)
+	curses.echo()
+	curses.nocbreak()
+	curses.endwin()
+
+
+def disconnect(set_last_login_try = 'now'):
+	global myname, sock, last_login_try
+
+	myname = '(not connected)'
+	sock.close()
+	sock = None
+	if set_last_login_try == 'now':
+		last_login_try = time.time()
+	else:
+		last_login_try = set_last_login_try
+
+
+def process_cmd(cmd):
+	global showtime, breakloop, sock
+
+	if cmd.startswith('exit') or cmd.startswith('quit'):
+		breakloop = 1
+	elif cmd.startswith('showtime'):
+		showtime = 1
+	elif cmd.startswith('hidetime'):
+		showtime = 0
+	elif cmd.startswith('go '):
+		send_line("GO:%s" % cmd[3:])
+	elif cmd.startswith('namesort'):
+		order = cmd[8:].strip()
+		if order == 'name':
+			views[0].players.set_sort(PlayerList.SORT_NAME)
+		elif order == 'team' or order == 'freq':
+			views[0].players.set_sort(PlayerList.SORT_TEAM)
+		elif order == 'none':
+			views[0].players.set_sort(PlayerList.SORT_NONE)
+		else:
+			views[0].players.set_sort()
+	elif cmd.startswith('mkwin'):
+		subrest = cmd[6:].split(None, 1)
+		try: sub, rest = subrest
+		except: sub, = subrest
+		if sub == 'mod':
+			if not find_mod_view():
+				views.append(make_mod_view())
+		elif sub == 'all':
+			if not find_all_view():
+				views.append(make_all_view())
+		elif sub == 'chat':
+			num = int(rest)
+			if not find_chat_view(num):
+				views.append(make_chat_view(num, ''))
+		elif sub == 'priv':
+			if not find_priv_view(rest):
+				views.append(make_priv_view(rest))
+	elif cmd == 'close':
+		if views[0] != find_arena_view():
+			del views[:1]
+	elif cmd == 'connect':
+		if sock:
+			add_line("Already connected!")
+		else:
+			last_login_try = 0
+	elif cmd == 'disconnect':
+		if not sock:
+			add_line("Not connected!")
+		else:
+			add_line("Disconnected.")
+			log(L_INFO, "Disconnected.")
+			disconnect(None) # disable auto-login
+	elif cmd.startswith('ignore'):
+		rest = cmd[6:].strip()
+		if rest:
+			if ignorelist.add(rest):
+				add_line("Ignoring: %s" % rest)
+			else:
+				add_line("Already ignored")
+		else:
+			add_line(str(ignorelist))
+	elif cmd.startswith('unignore'):
+		rest = cmd[8:].strip()
+		if rest:
+			if ignorelist.remove(rest):
+				add_line("Unignoring: %s" % rest)
+			else:
+				add_line("Not ignored")
+		else:
+			add_line(str(ignorelist))
+	else:
+		send_line("SEND:CMD:%s" % cmd)
+
+
+def process_typed(prefix, line):
+	def send_priv(dest, msg):
+		if not dest:
+			return
+		last_priv_list.add(dest)
+		send_line("SEND:PRIV:%s:%s" % (dest, msg))
+		txt = "%s to %s> %s" % (myname, dest, msg)
+		add_line(txt, colors.priv, find_priv_view(dest))
+		log(L_PRIV, txt)
+
+	if not line:
+		return
+
+	if line.startswith(';'):
+		# chat message
+		ns = line.find(';', 1)
+		if ns > 0 and ns < 16:
+			chan = line[1:ns]
+			try:
+				int(chan)
+				msg = line[ns+1:]
+			except:
+				chan = '1'
+				msg = line[1:]
+		else:
+			chan = '1'
+			msg = line[1:]
+
+		send_line("SEND:CHAT:%s" % line[1:])
+		txt = "%s:%s> %s" % (chan, myname, msg)
+		add_line(txt, colors.chat, find_chat_view(int(chan)))
+		log(L_CHAT, txt)
+
+	elif line.startswith("'"):
+		send_line("SEND:FREQ:%d:%s" % (myfreq, line[1:]) )
+		txt = "%s> %s" % (myname, line[1:])
+		add_line(txt, colors.freq)
+		log(L_FREQ, txt)
+
+	elif line.startswith('"'):
+		# foreign freq chat
+		pass
+
+	elif line.startswith(':'):
+		# priv msg
+		ns = line.find(':', 1)
+		if ns != -1:
+			send_priv(line[1:ns], line[ns+1:])
+	elif line.startswith('/'):
+		# priv msg
+		dest = views[0].players.get_selected()
+		if dest:
+			send_priv(dest.name, line[1:])
+	elif line.startswith('\\'):
+		# mod chat
+		send_line("SEND:MOD:%s" % line[1:])
+		txt = "%s> %s" % (myname, line[1:])
+		add_line(txt, colors.mod, find_mod_view())
+		log(L_MOD, txt)
+	elif line.startswith('?'):
+		# possible command
+		cmd = line[1:]
+		txt = "%s> %s" % (myname, line)
+		add_line(txt, colors.default)
+		log(L_CMD, txt)
+		try: process_cmd(cmd)
+		except: pass
+	elif line.startswith('='):
+		# freq change
+		try:
+			freq = int(line[1:])
+			send_line("CHANGEFREQ:%d" % freq)
+		except:
+			add_line("Bad freq number")
+	elif prefix:
+		# recur, with prefix
+		process_typed('', prefix+line)
+	else:
+		# pub msg
+		send_line("SEND:PUB:%s" % line)
+		txt = "%s> %s" % (myname, line)
+		add_line(txt, colors.pub)
+		log(L_PUB, txt)
+
+
+def process_loginok(line):
+	global myname
+	myname = line
+
+	txt = "Connected to %s:%d as %s" % (opts['server'], opts['port'], myname)
+	add_line(txt)
+	log(L_INFO, txt)
+
+	# enter arena
+	send_line("GO:%s" % opts.get('arena', ''))
+
+	# join chats and other autocommands
+	if opts.has_key('chats'):
+		deferred_typed_lines.append('?chat=%s' % opts['chats'])
+
+	# init lines can be split by newlines or bars
+	if opts.has_key('init'):
+		for l1 in opts['init'].split('\n'):
+			for l2 in l1.split('|'):
+				deferred_typed_lines.append(l2)
+
+
+
+def process_loginbad(line):
+	global sock
+
+	txt = "Bad login: %s" % line
+	add_line(txt)
+	log(L_INFO, txt)
+	disconnect()
+
+
+def process_inarena(line):
+	global myname, myfreq
+
+	arena, freq = line.split(':')
+	myfreq = int(freq)
+	txt = "Entered arena: %s" % arena
+	add_line(txt)
+	log(L_INFO, txt)
+
+	view = find_arena_view()
+	if view:
+		view.players.clear()
+		view.players.add(Player(myname, myfreq))
+
+	for l in deferred_typed_lines:
+		process_typed('', l)
+	del deferred_typed_lines[:]
+
+
+def process_player(line):
+	name, ship, freq = line.split(':')
+	txt = "Player here: %s" % name
+	add_line(txt)
+	log(L_INFO, txt)
+	view = find_arena_view()
+	if view: view.players.add(Player(name, int(freq)))
+
+
+def process_entering(line):
+	name, ship, freq = line.split(':')
+	txt = "Player entering: %s" % name
+	add_line(txt)
+	log(L_INFO, txt)
+	view = find_arena_view()
+	if view: view.players.add(Player(name, int(freq)))
+
+
+def process_leaving(line):
+	name = line
+
+	txt = "Player leaving: %s" % name
+	add_line(txt)
+	log(L_INFO, txt)
+	view = find_arena_view()
+	if view: view.players.remove(name)
+
+
+def process_msg(line):
+	type, rest = line.split(':', 1)
+	if type == 'ARENA' or type == 'CMD':
+		msg = rest
+		add_line(msg, colors.arena)
+		log(L_ARENA, msg)
+		chatparser.line(rest)
+		# special case for auto-reconnect after biller drop:
+		if rest.lower().startswith(biller_reconnect_msg):
+			add_line("Auto-reconnecting...")
+			disconnect(0)
+	elif type == 'PUB' or type == 'PUBM':
+		name, msg = rest.split(':', 1)
+		if ignorelist.checkignored(name): return
+		txt = '%s> %s' % (name, msg)
+		add_line(txt, colors.pub)
+		log(L_PUB, txt)
+	elif type == 'PRIV':
+		name, msg = rest.split(':', 1)
+		if ignorelist.checkignored(name): return
+		txt = '%s> %s' % (name, msg)
+		add_line(txt, colors.priv, find_priv_view(name))
+		last_priv_list.add(name)
+		log(L_PRIV, txt)
+	elif type == 'FREQ':
+		name, msg = rest.split(':', 1)
+		if ignorelist.checkignored(name): return
+		txt = '%s> %s' % (name, msg)
+		add_line(txt, colors.freq)
+		log(L_FREQ, txt)
+	elif type == 'CHAT':
+		chan, text = rest.split(':', 1)
+		try:
+			# there's no foolproof way to get the name from a chat
+			# message, so this is our best effort
+			name, _ = text.split('> ', 1)
+			if ignorelist.checkignored(name): return
+		except:
+			pass
+		add_line(rest, colors.chat, find_chat_view(int(chan)))
+		log(L_CHAT, rest)
+	elif type == 'MOD':
+		name, msg = rest.split(':', 1)
+		if ignorelist.checkignored(name): return
+		txt = '%s> %s' % (name, msg)
+		add_line(txt, colors.mod, find_mod_view())
+		log(L_MOD, txt)
+	elif type == 'SYSOP':
+		msg = rest
+		add_line(msg, colors.sysop)
+		log(L_SYSOP, msg)
+	elif type == 'SQUAD':
+		squad, sender, msg = rest.split(':', 2)
+		if ignorelist.checkignored(sender): return
+		txt = '(#%s)(%s)> %s' % (squad, sender, msg)
+		add_line(txt, colors.squad)
+		log(L_SQUAD, txt)
+	else:
+		add_line("Bad message subtype from server: '%s'" % type)
+
+
+def process_sfc(line):
+	global colors, myfreq
+
+	player, ship, freq = line.split(':')
+	ship = int(ship)
+	freq = int(freq)
+
+	if (player == myname):
+		myfreq = freq
+
+	view = find_arena_view()
+	if view: view.players.sfc(player, ship, freq)
+
+	if ship == 8:
+		txt = '%s is now on freq %s as a spectator' % (player, freq)
+		add_line(txt)
+		log(L_INFO, txt)
+	else:
+		txt = '%s is now on freq %s in a %s' % (player, freq, ship_names[ship])
+		add_line(txt)
+		log(L_INFO, txt)
+
+
+def process_kill(line):
+	global colors
+
+	killer, killed, bty, flags = line.split(':')
+
+	if int(flags) > 0:
+		txt = '%s killed %s(%s:%s)' % (killer, killed, bty, flags)
+	else:
+		txt = '%s killed %s(%s)' % (killer, killed, bty)
+
+	add_line(txt, colors.kill)
+	log(L_KILL, txt)
+
+
+dispatch = \
+{
+	'LOGINOK': process_loginok,
+	'LOGINBAD': process_loginbad,
+	'INARENA': process_inarena,
+	'PLAYER': process_player,
+	'ENTERING': process_entering,
+	'LEAVING': process_leaving,
+	'MSG': process_msg,
+	'SHIPFREQCHANGE': process_sfc,
+	'KILL': process_kill
+}
+
+def process_incoming(line):
+	type, rest = line.split(':', 1)
+	if dispatch.has_key(type):
+		dispatch[type](rest)
+	else:
+		add_line("Bad message type from server: '%s'" % type)
+
+
+def send_line(line):
+	if line == "SEND:CMD:chat":
+		# special handling for the results of ?chat:
+		chatparser.reset()
+	if sock:
+		sock.sendall(line + '\n')
+
+
+def add_line(line, color = None, view = None, setnewcrap = 1, sync = 0, no_all_view = 0):
+	if not views:
+		return
+	# by default, send things to the arena view
+	if view is None:
+		view = find_arena_view()
+	if color is None:
+		color = colors.info
+	# add the line to the target view
+	lineobj = Line(line, color)
+	# maybe add current date
+	lastline = view.text.lastline()
+	if lastline and lastline.halfdayid() != lineobj.halfdayid():
+		dateline = Line(lineobj.halfdayid(), colors.date, tm = None)
+		view.text.addline(dateline)
+	view.text.addline(lineobj)
+	if view != views[0] and setnewcrap:
+		view.newcrap += 1
+	if jumpback:
+		view.scrollback = 0
+	elif view.scrollback > 0:
+		if view == views[0]:
+			view.newcrap += 1
+		view.scrollback += 1
+	# optionally, also add it to the "all" view
+	if not no_all_view:
+		allview = find_all_view()
+		if allview:
+			allview.text.addline(lineobj)
+			if jumpback:
+				allview.scrollback = 0
+			elif allview.scrollback > 0:
+				allview.scrollback += 1
+	if sync:
+		redisplay()
+
+
+colonstate = 0
+def process_key():
+	global wins, bindings, colonstate
+	colon = ord(':')
+
+	ch = wins.stdscr.getch()
+
+	if ch != colon:
+		colonstate = 0
+
+	if ch == -1:
+		pass
+	elif ch == curses.KEY_RESIZE:
+		init_wins()
+	elif ch == curses.KEY_MOUSE:
+		id, x, y, z, state = curses.getmouse()
+		if state & curses.BUTTON4_CLICKED:
+			pass
+	elif ch == 27:
+		# get all chars of an escape sequence
+		seq = []
+		while ch != -1:
+			seq.append(ch)
+			ch = wins.stdscr.getch()
+		f = bindings.getbinding(seq)
+		if f:
+			f()
+	elif ch == colon:
+		if colonstate == 0:
+			if views[0].edit.get_text() == ':':
+				colonstate = 1
+				views[0].edit.set_text(':%s:' % last_priv_list.get(0))
+			else:
+				views[0].edit.insert(ch)
+		elif colonstate == 1:
+			views[0].edit.set_text(':%s:' % last_priv_list.get())
+	else:
+		# hand off to bindings
+		f = bindings.getbinding([ch])
+		if f:
+			f()
+		elif ch == 32 and len(views[0].edit.line) == 0:
+			# hardcoded page-down
+			views[0].scrollback -= wins.twin.getmaxyx()[0] - 1
+			if views[0].scrollback < 0:
+				views[0].scrollback = 0
+		elif ch >= 32 and ch < 127:
+			views[0].edit.insert(ch)
+
+
+inbuf = ''
+def read_data():
+	global sock, inbuf
+
+	try:
+		r = sock.recv(1024)
+		if r:
+			inbuf = inbuf + r
+		else:
+			add_line("Server disconnected.")
+			log(L_INFO, "Server disconnected.")
+			disconnect()
+			return
+
+		lines = inbuf.splitlines(1)
+		inbuf = ''
+		for l in lines:
+			if l.endswith('\n') or l.endswith('\r'):
+				process_incoming(l.strip())
+			else:
+				inbuf = l
+
+	except:
+		pass
+
+
+last_sent_keepalive = time.time()
+def send_keepalive(tm):
+	global keepalive, last_sent_keepalive
+
+	if sock and keepalive and (tm - last_sent_keepalive) > keepalive:
+		send_line('NOOP')
+		last_sent_keepalive = tm
+
+
+# reload the log file once per day
+last_days_value = 0
+def check_logfile(tm):
+	global last_days_value
+	timetuple = time.localtime(tm)
+	days = timetuple[2]
+	if days != last_days_value:
+		reload_logfile()
+		last_days_value = days
+
+
+def redisplay():
+	views[0].display(wins)
+	curses.doupdate()
+
+
+def try_connect():
+	global sock, last_login_try, login_retry_time
+
+	last_login_try = time.time()
+	try:
+		add_line("Connecting to %s:%d..." % (opts['server'], opts['port']), sync = 1)
+
+		sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+		sock.connect((opts['server'], opts['port']))
+
+		add_line("Logging in as %s..." % opts['name'], sync = 1)
+		send_line("LOGIN:1;ccc %s:%s:%s" % (ccc_version, opts['name'], opts['password']))
+		login_retry_time = opts.get('login_retry_time', 60) / 2
+	except socket.error, e:
+		disconnect()
+		_, etxt = e
+		add_line("Socket error: %s" % etxt, sync = 1)
+		login_retry_time = min(2 * login_retry_time,
+				opts.get('max_login_retry_time', 3*60*60))
+
+
+
+def main_loop():
+	global wins, breakloop
+
+	breakloop = 0
+
+	while not breakloop:
+		# show stuff
+		redisplay()
+
+		# maybe try to connect
+		if (
+				not sock and
+				last_login_try is not None and
+				(time.time() - last_login_try) > login_retry_time):
+			try_connect()
+
+		# do a select
+		try:
+			if sock:
+				ready, _, _ = select.select([sys.stdin, sock], [], [], 10)
+			else:
+				ready, _, _ = select.select([sys.stdin], [], [], 1)
+		except:
+			ready = []
+
+		tm = time.time()
+
+		# read keyboard input
+		if sys.stdin in ready: process_key()
+		# read some data
+		if sock in ready: read_data()
+		# send keepalive
+		send_keepalive(tm)
+		# check for re-opening logfile
+		check_logfile(tm)
+
+
+def cleanup_code(code):
+	import string
+	lines = code.split('\n')
+	lines = map(string.strip, lines)
+	return '\n'.join(lines)
+
+
+deferred_color_args = []
+def process_config(file):
+	global bindings
+	global editheight, pwidth, showtime, indent, jumpback, keeplines, keepalive
+	global login_retry_time
+
+	bindings = Bindings()
+
+	# default bindings
+	bindings.bind('^J', bindings.finish_line)
+	bindings.bind('^M', bindings.finish_line)
+	bindings.bind(curses.KEY_ENTER, bindings.finish_line)
+	bindings.bind(curses.KEY_BACKSPACE, bindings.backspace)
+	bindings.bind(curses.KEY_DC, bindings.delete)
+	bindings.bind(curses.KEY_RIGHT, bindings.curs_right)
+	bindings.bind(curses.KEY_LEFT, bindings.curs_left)
+	bindings.bind('^A', bindings.curs_home)
+	bindings.bind(curses.KEY_HOME, bindings.curs_home)
+	bindings.bind(curses.KEY_END, bindings.curs_end)
+	bindings.bind('^E', bindings.curs_end)
+	bindings.bind(curses.KEY_UP, bindings.scroll_up, 1)
+	bindings.bind(curses.KEY_DOWN, bindings.scroll_down, 1)
+	bindings.bind('^U', bindings.kill_line)
+	bindings.bind('^I', bindings.rotate_view)
+	bindings.bind(curses.KEY_BTAB, bindings.rotate_view, -1)
+
+	bindings.bind(curses.KEY_PPAGE, bindings.player_select_up)
+	bindings.bind(curses.KEY_NPAGE, bindings.player_select_down)
+	bindings.bind(curses.KEY_F2, bindings.sort_player_list)
+
+	opts = {}
+
+	# get 'bind' and the action funcs in there
+	for d in dir(Bindings):
+		opts[d] = getattr(bindings, d)
+
+	# get the KEY_* constants in there
+	for d in dir(curses):
+		if d.startswith('KEY_'):
+			opts[d] = getattr(curses, d)
+
+	# add a color setter function
+	def color(*args):
+		global deferred_color_args
+		deferred_color_args.append(args)
+	opts['color'] = color
+
+	# add an ignore function
+	def ignore(name):
+		global ignorelist
+		ignorelist.add(name)
+	opts['ignore'] = ignore
+
+	execfile(file, opts, opts)
+
+	# check command-line params
+	args = sys.argv[1:]
+	if args:
+		for arg in args:
+			if opts.has_key(arg):
+				try:
+					exec cleanup_code(opts[arg]) in opts
+				except:
+					import traceback
+					print "Error in config file:"
+					traceback.print_exc()
+			else:
+				try:
+					exec cleanup_code(arg) in opts
+				except:
+					import traceback
+					print "Can't process command line argument '%s':" % arg
+					traceback.print_exc()
+	elif opts.has_key('default'):
+		try:
+			exec cleanup_code(opts['default']) in opts
+		except:
+			import traceback
+			print "Error in config file:"
+			traceback.print_exc()
+
+	editheight = opts.get('editheight', 3)
+	pwidth = opts.get('playerwidth', 15)
+	indent = opts.get('indent', 2)
+	showtime = opts.get('showtime', 1)
+	jumpback = opts.get('jumpback', 0)
+	keeplines = opts.get('keeplines', 1000)
+	keepalive = opts.get('keepalive', 0)
+	login_retry_time = opts.get('login_retry_time', 60) / 2
+
+	return opts
+
+
+def main():
+	global wins, sock, views, myname, colors, chatparser, opts
+	global last_priv_list, deferred_typed_lines, last_login_try
+	global ignorelist
+
+	colors = None
+	myname = '(not connected)'
+	deferred_typed_lines = []
+	last_login_try = 0
+
+	last_priv_list = LastPrivList(10)
+	wins = MyWindows()
+	chatparser = ChatParser()
+	ignorelist = IgnoreList()
+	sock = None
+
+	# get config file
+	if os.environ.get('CCC_CONFIG_FILE'):
+		opts = process_config(os.environ.get('CCC_CONFIG_FILE'))
+	else:
+		try:
+			opts = process_config(os.environ.get('HOME') + '/.ccc-config')
+		except:
+			import traceback
+			print "Error in config file:"
+			traceback.print_exc()
+			sys.exit(1)
+
+	# check for required options
+	if not opts.has_key('name') or not opts.has_key('password') or \
+	   not opts.has_key('server') or not opts.has_key('port'):
+		print "The config file must include a name, password, server, and port."
+		sys.exit(2)
+
+	print "ccc %s - a console chat client <grelminar@yahoo.com>" % ccc_version
+
+	start_curses()
+
+	try:
+		# default bindings based on curses settings. these can't be done
+		# until after we init curses.
+		bindings.bind(curses.erasechar(), bindings.backspace)
+		bindings.bind(curses.killchar(), bindings.kill_line)
+
+		colors = Colors()
+
+		views = None
+		views = [make_arena_view()]
+		add_line('Window: messages', view = find_arena_view(), setnewcrap = 0, no_all_view = 1)
+		if opts.get('allwindow', 0):
+			views.insert(0, make_all_view())
+
+		init_logfile(opts.get('logfile'))
+		try_load_log_history()
+
+		main_loop()
+
+	finally:
+		end_curses()
+
+	log(L_INFO, "Disconnected.")
+
+
+if __name__ == '__main__':
+	main()
+

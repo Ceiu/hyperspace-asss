@@ -1,0 +1,12 @@
+localtime by EdTheInvincible (apeti@ajrg.hu)
+
+-Compiling
+Linux: make -f localtime.mk
+Win: .dll project (add util.c, zlib.lib, pthread.lib if necy)
+
+-Installation
+Put localtime.so/.dll in bin/.
+Put localtime:localtime at the bottom of conf/modules.conf
+Add cmd_localtime to conf/groupdef.dir/default
+
+thx goes to smong for the templates

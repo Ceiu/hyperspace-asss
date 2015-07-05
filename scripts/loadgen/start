@@ -1,0 +1,4 @@
+#!/bin/sh
+for a in `seq ${1:-10}`; do
+	python -OO loadgen.py &
+done

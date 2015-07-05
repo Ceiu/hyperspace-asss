@@ -1,0 +1,72 @@
+#!/usr/bin/env python
+#
+# billing server proxy for asss
+#
+# this program gets run by the server when it wants to connect to the
+# billing server. it gets two command line arguments, which are the
+# values of Billing:IP and Billing:Port in global.conf. its standard
+# input and output is a socket that should be used for communicating
+# with the server.
+#
+# general implementation strategy: we want to let asss do as much work
+# as possible in terms of keeping track of states and things. so we want
+# things like eof's and disconnects to be translated appropriately.
+# i.e., if the remote biller disconnects, we close our local socket and
+# die. if our local socket dies, we send a 0007 and die. in general, we
+# should try to be as stateless as possible, just translating messages
+# back and forth between protocols.
+#
+# dist: public
+
+
+import sys, socket, select
+
+import vie_bprot, asss_bprot, util
+
+
+def main():
+	sys.stdout = sys.stderr
+
+	# grab params from cmd line
+	ip = sys.argv[1]
+	port = int(sys.argv[2])
+
+	# log file
+	util.open_logfile('log/bproxy.log')
+	util.log('bproxy %s started' % util.version)
+
+	# set up socket for remote biller
+	rsock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+	rsock.connect((ip, port))
+	rsock.setblocking(0)
+
+	# get local socket
+	lsock = socket.fromfd(0, socket.AF_UNIX, socket.SOCK_STREAM)
+	lsock.setblocking(0)
+
+	vie_bprot.set_sock(rsock)
+	asss_bprot.set_sock(lsock)
+
+	vie_bprot.connect()
+
+	while 1:
+
+		# do a select 5 times a second
+		try:
+			ready, _, _ = select.select([rsock, lsock], [], [], 0.2)
+		except:
+			ready = []
+
+		# read/process some data
+		if lsock in ready:
+			asss_bprot.try_read()
+		if rsock in ready:
+			vie_bprot.try_read()
+
+		# try sending
+		vie_bprot.try_sending_outqueue()
+
+
+if __name__ == '__main__':
+	main()
+

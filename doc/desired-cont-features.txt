@@ -1,0 +1,288 @@
+
+========================================================================
+server-controlled ships that take damage by listening to damage packets
+from clients
+========================================================================
+
+the last byte of the player entering/player info packet is now a
+bitfield. bit 0 (mask 0x01) means the person has a koth crown. bit 1
+(mask 0x02) means the player is "server-controlled". the client should
+send one of these to the server every time one of its weapons (bullets,
+bombs, shrap, burst, thor) hits any player with the server-controlled
+bit on.
+
+
+/* file: packets/fakedamage.h */
+
+#define C2S_FAKE_PLAYER_DAMAGE 0x50
+
+struct C2SFakePlayerDamage /* 15 bytes */
+{
+	u8 type; /* C2S_FAKE_PLAYER_DAMAGE */
+	/* the pid of the player who took damage */
+	i16 pid;
+	/* the client should calculate how much, including random bullet
+	 * damage, and put it in here */
+	i16 damage;
+	/* the weapon type and level that it was hit with */
+	struct Weapons weapon;
+	/* the time it was fired */
+	u32 firetime;
+	/* the time it hit */
+	u32 hittime;
+};
+
+/* end of packets/fakedamage.h */
+
+
+
+========================================================================
+new stats stuff
+========================================================================
+
+/* file: packets/stats.h */
+
+/* basic ideas:
+ *
+ * the server keeps track of lots of stats for each player for each
+ * arena. each stat is identified by a "stat id", an unsigned integer
+ * that fits in 16 bits. each stat has a value, which is a signed 32-bit
+ * integer.
+ *
+ * the file statcodes.h contains the definitions of the stat ids. when
+ * adding new stat ids to that file, make sure that the ids of existing
+ * stats are not altered.
+ *
+ * when entering an arena, the server sends a few packets to the client
+ * describing what the F2 boxes look like for that arena. there may be
+ * more than one stat box. each S2C_STATBOX packet defines a single one.
+ * each box has a name, that the client can display to help the user
+ * differentiate them.
+ *
+ * each box can have several columns, each with a name. to get a value
+ * to display for a particular column, the client is required to do a
+ * tiny bit of processing: each column has an operation, and two stat
+ * ids. for OP_ADD, the client should take the values of the stats given
+ * by the stat ids, and add them. for OP_DIV, it divides them. for
+ * OP_ONE, it simply takes the value given by the first stat. for
+ * OP_RATING, it uses specific (hardcoded, not sent in the packet) stat
+ * ids, and puts them in the classic rating forumla. for OP_NAME and
+ * OP_SQUAD, it doesn't display a number, but instead the player's name
+ * and squad.
+ *
+ * each box also has a sort mode, described in the comments below.
+ *
+ * the server can send S2C_STATUPDATE packets at any time. each one may
+ * contain data for any number of players.
+ *
+ * if the stat box requires the client to display a piece of data that
+ * the server has not sent it yet, it should display a zero.
+ *
+ */
+
+#define S2C_STATUPDATE 0x50
+#define S2C_STATBOX 0x51
+
+enum sort_by
+{
+	SORT_ALPHA_TEAM, /* sort alphabetically, player's team on top */
+	SORT_ALPHA, /* sort everyone alphabetically */
+	SORT_TEAM, /* sort by team */
+	SORT_COLUMN_0, /* sort based on the values of the first column */
+};
+
+enum stat_op
+{
+	OP_ONE, /* a */
+	OP_ADD, /* a + b */
+	OP_DIV, /* a / b */
+	OP_RATING, /* the rating forumula */
+	OP_NAME, /* display the player's name */
+	OP_SQUAD, /* display the player's squad */
+};
+
+struct S2CStatBox
+{
+	u8 type; /* S2C_STATBOX */
+	char boxname[24];
+	u8 sortby;
+	/* there can be any number of these */
+	struct Column
+	{
+		u8 op;
+		u16 a_stat;
+		u8 a_interval;
+		u16 b_stat;
+		u8 b_interval;
+		char name[16];
+	} columns[0];
+};
+
+struct S2CStatUpdate
+{
+	u8 type; /* S2C_STATUPDATE */
+	/* any number of these */
+	struct StatUpdate
+	{
+		u16 pid; /* if pid == -1, apply this update to all players */
+		u16 statid; /* if statid == -1, apply this update to all stats for this pid */
+		u8 interval; /* if interval == -1, INCREMENT stats in all
+		                invervals by newval */
+		i32 newval;
+	} updates[0];
+};
+
+/* end of packets/stats.h */
+
+
+/* file: statcodes.h */
+
+/* note: each of these stats is kept track of over several intervals:
+ * forever, per-reset, and per-game. */
+
+enum stat_t
+{
+	/* these four correspond to the standard subspace statistics */
+	STAT_KILL_POINTS = 0,
+	STAT_FLAG_POINTS,
+	STAT_KILLS,
+	STAT_DEATHS,
+
+	/* these are extra general purpose statistics */
+	STAT_ASSISTS = 100,
+	STAT_TEAM_KILLS,
+	STAT_TEAM_DEATHS,
+	STAT_ARENA_TOTAL_TIME,
+	STAT_ARENA_SPEC_TIME, /* not implemented */
+	STAT_DAMAGE_TAKEN, /* not implemented */
+	STAT_DAMAGE_DEALT, /* not implemented */
+
+	/* these are for flag stats */
+	STAT_FLAG_PICKUPS = 200,
+	STAT_FLAG_CARRY_TIME,
+	STAT_FLAG_DROPS,
+	STAT_FLAG_NEUT_DROPS,
+	STAT_FLAG_KILLS,
+	STAT_FLAG_DEATHS,
+	STAT_FLAG_GAMES_WON, /* no per-game */
+	STAT_FLAG_GAMES_LOST, /* no per-game */
+
+	/* for powerball */
+	STAT_BALL_CARRIES = 300,
+	STAT_BALL_CARRY_TIME,
+	STAT_BALL_GOALS,
+	STAT_BALL_GAMES_WON, /* no per-game */
+	STAT_BALL_GAMES_LOST, /* no per-game */
+
+	/* other games */
+	STAT_KOTH_GAMES_WON = 400, /* no per-game */
+
+	/* non-standard ball stats (none implemented yet) */
+	STAT_BALL_ASSISTS = 500,
+	STAT_BALL_STEALS,
+	STAT_BALL_DELAYED_STEALS,
+	STAT_BALL_TURNOVERS,
+	STAT_BALL_DELAYED_TURNOVERS,
+	STAT_BALL_SAVES,
+	STAT_BALL_CHOKES,
+};
+
+
+/* these are the possible intervals */
+enum interval_t
+{
+	/* these are shared between arenas with the same arenagrp */
+	INTERVAL_FOREVER = 0,
+	INTERVAL_RESET,
+	INTERVAL_MAPROTATION,
+	/* these are not shared between arenas */
+	INTERVAL_GAME = 5
+};
+#define MAX_INTERVAL 10
+#define INTERVAL_IS_SHARED(iv) ((iv) < 5)
+
+
+/* this function can be used to get a nice name for a particular stat */
+const char *get_stat_name(int st);
+const char *get_interval_name(int iv);
+
+/* end of statcodes.h */
+
+
+
+========================================================================
+moving between zones without leaving the game
+========================================================================
+
+this is more of a client-only feature. have a ?zones command that pops
+up an in-game list of zones in favorite.lst and let the user choose
+among them, just like ?arena. probably esc + Z should also do it.
+
+
+
+========================================================================
+setting a spawn location
+========================================================================
+
+you can mostly do this with cont by sending a warpto packet immediately
+after the entering arena packet. that's good enough for when entering
+the arena, but there should be some way for the server to set spawn
+locations for all spawns, not just the first.
+
+i have no other plans for this feature yet.
+
+
+
+========================================================================
+controlling full charge prizes
+========================================================================
+
+make it configurable whether getting a cloak prize when your ship isn't
+allowed to get cloak (or anything else) turns into an fc. I doubt anyone
+depends on that behavior, so I'd suggest re-running the random prize
+code if you get something you're not allowed to.
+
+
+
+========================================================================
+setting changes
+========================================================================
+
+the server should be able to send a delta of the changed settings,
+instead of the whole big settings packet. here's what it can look like:
+
+#define S2C_SETTINGS_CHANGE 0x52
+
+struct S2CSettingsChange
+{
+	u8 type;
+	struct
+	{
+		i16 offset;   /* from start of packet */
+		u32 newvalue; /* always overwrite 32 bits starting at offset */
+	} changes[1]; /* can be any number of these */
+};
+
+
+
+========================================================================
+fix autowarp bug, add energy modification support
+========================================================================
+
+when cont gets a position packet for itself, it should extract as much
+information from it as possible, including position, velocity, rotation,
+bounty, and energy. but it should not use the timestamp value in any
+way, especially not in a way that throws off the internal physics model,
+like it does now.
+
+
+
+========================================================================
+fix brick bug
+========================================================================
+
+cont should determine brick uniqueness by the brick id number, not by
+the timestamp.
+
+
+

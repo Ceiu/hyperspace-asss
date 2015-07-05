@@ -1,0 +1,226 @@
+
+asss - a small subspace server
+------------------------------
+
+module-writing tutorial
+-----------------------
+
+The design works something like this: everything is a module. So you
+extend the server just by writing more modules. The current list of
+modules is:
+
+admincmd aliasdb ap_multipub arenaman arenaperm auth_file auth_prefix
+autoturret autowarp balls banners basicstats billing billing_ssc
+bricklayer buy capman cfghelp chat chatnet clientset cmdman config core
+directory encrypt fake filetrans flags fm_lockspec fm_normal freqowners
+game game_timer help jackpot koth lagaction lagdata log_console log_file
+log_sysop logman mainloop mapdata mapnewsdl messages mysql net nullenc
+objects periodic persist playercmd playerdata points_flag points_goal
+points_kill points_periodic points_turf_reward pymod quickfix record
+security sendfile stats turf_reward turf_stats watchdamage
+
+sed -n '/MM_[a-z]/s/.*MM_\([a-z_]\+\).*/\1/p' ../src/*.c | sort -u | fmt
+
+
+A module resides in a single .c file, and an optional .h file if it
+exposes any interfaces for other modules to use. All functions except
+the entry point should be local to the module, use "local" (which is
+#defined to be "static") to do that. All global data should be marked
+local too. This is to avoid name conflicts when different modules use
+the same global variables, and just because there's no reason to expose
+them to the outside.
+
+Lots of modules expose interfaces for other modules to use. These are
+just structs of function pointers. You only interact with other modules
+through these interfaces; that's why they're called interfaces. They're
+defined in the .h files.
+
+I'll use log_console as an example, because it's so simple:
+
+/* log_console.c */
+
+/* we need this include file because we'll be using it */
+#include <stdio.h>
+
+/* this contains everything we need to talk to other parts of the server */
+#include "asss.h"
+
+/* this variable will hold the address of the log manager interface. */
+local Ilogman *logm;
+
+/* this function will be called for each line of log output */
+local void LogConsole(char lev, char *s)
+{
+	/* here, we call the FilterLog function exposed by the log manager
+	 * to determine if this log message is worthy of output. if so,
+	 * print it out. */
+	if (logm->FilterLog(lev, s, "log_console"))
+		puts(s);
+}
+
+
+/* this is the entry point. action will tell us whether to initialize or
+ * deinitialize. mm will point to the module manager interface, through
+ * which we can find out about others. arena is only used if action is
+ * MM_ATTACH or MM_DETACH, and it will specify which arena to set up
+ * stuff for. */
+EXPORT int MM_log_console(int action, Imodman *mm, Arena *arena)
+{
+	if (action == MM_LOAD)
+	{
+		/* if we're being loaded, we need to get access to the log
+		 * manager interface. do this by giving its name, and the
+		 * special arena id ALLARENAS since we aren't interested in a
+		 * particular arena. */
+		logm = mm->GetInterface("logman", ALLARENAS);
+		/* if we didn't actually get a valid interface, tell the loader
+		 * that we can't load either. */
+		if (!logm) return MM_FAIL;
+		/* the callback mechanism is used to associate several functions
+		 * with an event, like a log message. we have to register a
+		 * callback with the event we want: CB_LOGFUNC, the function to
+		 * call: LogConsole, and the arenas we want to be called for:
+		 * ALLARENAS. not all events differentiate between arenas. */
+		mm->RegCallback(CB_LOGFUNC, LogConsole, ALLARENAS);
+		/* everything went ok, so tell the loader to continue. */
+		return MM_OK;
+	}
+	else if (action == MM_UNLOAD)
+	{
+		/* here, we undo everything we did while loading. first
+		 * unregister the callback. */
+		mm->UnregCallback(CB_LOGFUNC, LogConsole, ALLARENAS);
+		/* you have to call ReleaseInterface on any interface that you
+		 * get from GetInterface so that proper reference counts can be
+		 * maintained. */
+		mm->ReleaseInterface(logm);
+		/* and signify success */
+		return MM_OK;
+	}
+	return MM_FAIL;
+}
+
+/* end of log_console.c */
+
+
+To expose an interface to other modules, you have to do several things. I'll
+use the log manager as an example. Here's logman.h, abbreviated:
+
+/* start of logman.h */
+
+/* this typedef declares LogFunc as the signature that any logging
+ * callback function should match. unfortunately, these things can't be
+ * checked by the compiler, but you'll probably know of you're trying to
+ * use mismatching functions. */
+typedef void (*LogFunc)(char level, char *message);
+
+/* this is the callback id for log functions */
+#define CB_LOGFUNC ("log")
+
+
+/* this struct defines the interface itself */
+typedef struct Ilogman
+{
+	/* all interfaces must start with this macro. it sets up space to
+	 * hold an implementation name and a reference count (and maybe more
+	 * in the future. */
+	INTERFACE_HEAD_DECL
+
+	/* these two lines just declare members of the struct, which happen
+	 * to be function pointers. */
+	void (*Log)(char level, const char *format, ...);
+	int (*FilterLog)(char level, const char *line, const char *modname);
+} Ilogman;
+
+/* end of logman.h */
+
+Now, to make an implementation of that interface:
+
+/* start of logman.c */
+
+/* ... #includes omitted ... */
+
+/* ... struct definitions omitted ... */
+
+/* declare prototypes for the functions that will implement the
+ * interface. these happen to have the same names as the members of the
+ * struct, but that's not strictly necessary. */
+local void Log(char, const char *, ...);
+local int FilterLog(char, const char *, const char *);
+
+/* also declare any other prototypes you might need */
+local void * LoggingThread(void *);
+
+/* ... other local variables omitted ... */
+
+/* declare pointers to any other interfaces that your module might use */
+local Imodman *mm;
+local Iconfig *cfg;
+
+/* this is the first important part: declare a static value of the
+ * interface type, and initialize it with your functions. the compiler
+ * can check these signatures statically. */
+local Ilogman lmint =
+{
+	/* this macro must always be first. it initializes the stuff that
+	 * INTERFACE_HEAD_DECL declared. the first thing is the id of the
+	 * interface that we're implementing. the next is the name. the name
+	 * given to the macro should uniquely identify this particular
+	 * _implementation_ of this interface. that is, if you have two
+	 * implementations of some interface, they should be given different
+	 * names. in this case, there is only one implementation of the log
+	 * manager, so we name it the same as the interface name. */
+	INTERFACE_HEAD_INIT(I_LOGMAN, "logman")
+	/* these are the actual implementing functions */
+	Log, FilterLog
+};
+
+
+EXPORT int MM_logman(int action, Imodman *mm_, int arena)
+{
+	if (action == MM_LOAD)
+	{
+		/* this just saves a pointer to the module manager so we can
+		 * use it later. we need this to use stuff like DO_CBS. */
+		mm = mm_;
+		/* you've seen this before */
+		cfg = mm->GetInterface("config", ALLARENAS);
+		/* ... other initializing stuff omitted ... */
+		/* this is the important part: register the interface as a log
+		 * manager, and specify that it's valid for ALLARENAS. */
+		mm->RegInterface(&lmint, ALLARENAS);
+		return MM_OK;
+	}
+	else if (action == MM_UNLOAD)
+	{
+		/* unregister our interface. UnregInterface will return a number
+		 * indicating the number of other references to our interface
+		 * that haven't been released yet. if that number isn't zero,
+		 * return MM_FAIL to indicate that we shouldn't be unloaded yet.
+		 */
+		if (mm->UnregInterface(&lmint, ALLARENAS))
+			return MM_FAIL;
+		/* ... other deinitializing stuff omitted ... */
+		/* release the interface that we got above */
+		mm->ReleaseInterface(cfg);
+		/* now, we can be safely unloaded */
+		return MM_OK;
+	}
+	else if (action == MM_CHECKBUILD)
+		return BUILDNUMBER;
+	return MM_FAIL;
+}
+
+/* ... lots of function definitions omitted ... */
+
+/* end of logman.c */
+
+
+Note that even though the functions will be called from other modules,
+they can (and should) still be declared as local (static). This is
+because they are called through function pointers and not directly by
+name, and you don't want to confuse the linker by exporting lots of
+functions whose names may clash.
+
+# dist: public
+

@@ -1,0 +1,11 @@
+
+The provided Makefile should work on FreeBSD. There are no binaries.
+Some things to note:
+
+- You should have Berkeley DB 4.x and Python 2.2.x (or greater)
+  installed (from the ports tree).
+
+- Read lines 40 and 47 of the Makefile.
+
+Good luck!
+

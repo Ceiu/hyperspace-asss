@@ -1,0 +1,102 @@
+
+ping/information protocol
+version 1.0
+grelminar@yahoo.com
+
+-------------------------
+
+
+all communication happens over udp on the port one higher than the game
+protocol port. byte order is little-endian. no packet will be larger
+than 512 bytes. everything is stateless.
+
+
+option one (the old ping protocol):
+
+client sends a 4 byte packet to the server's ping port. typically the 4
+bytes will be a timestamp, but the server doesn't interpret them.
+
+struct C2SSimplePing {
+	u32 timestamp;
+};
+
+the server replies with 8 bytes:
+
+struct S2CSimplePing {
+	u32 total;
+	u32 timestamp;
+};
+
+where total is the current number of fully-connected clients (including
+bots but not including server-internal fake players). timestamp is a
+copy of the client's timestamp.
+
+for asss virtual zones, the total will be the number of fully-connected
+clients in all the arenas belonging to that virtual zone.
+
+
+option two (new asss ping protocol):
+
+client sends an 8 byte packet to the server's ping port.
+
+struct C2SNewPing {
+	u32 timestamp;
+	u32 options;
+};
+
+again, the timestamp isn't interpreted by the server.
+
+options is a bitfield where each bit indicates a request for a certain
+type of information to be returned.
+
+the current defined bits are:
+
+PING_GLOBAL_SUMMARY = 0x01 - global player count information
+PING_ARENA_SUMMARY  = 0x02 - by-arena player count information
+
+the server responds with a variable-length packet.
+
+the first 8 bytes are always the following:
+
+struct S2CNewPingHeader {
+	u32 timestamp;
+	u32 options;
+};
+
+the timestamp is copied from the client. the options bitfield indicates
+what data is present, and how the following bytes should be interpreted.
+
+note that the options returned might not be the same as the options
+requested, although typically they will be.
+
+if PING_GLOBAL_SUMMARY is included, the next 8 bytes will be:
+
+struct S2CNewPingGlobalSummary {
+	u32 total;
+	u32 playing;
+};
+
+where total is the number of fully-connected clients, and playing is the
+number of clients that are actually flying around in ships.
+
+if PING_ARENA_SUMMARY is included, the next variable-length sequence of
+bytes will be a series of blocks of this format:
+
+struct S2CNewPingArenaSummaryChunk {
+	char name[]; // variable-length and null-terminated
+	u16 total;
+	u16 playing;
+};
+
+arena names that consist of only digits are considered "public arenas"
+and should probably be displayed as "(Public %d)".
+
+a one-byte chunk with a zero-length name (that is, a single nul byte)
+indicates the end of the series.
+
+note that the sums of the data in the arena chunks may not add up to the
+values in the global summary because of the presence of hidden arenas.
+
+
+# dist: public
+

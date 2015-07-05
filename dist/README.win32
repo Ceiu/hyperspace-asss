@@ -1,0 +1,54 @@
+
+Hi. This is a development release of asss ("a small subspace server").
+If you have any questions or comments, mail them to grelminar@yahoo.com.
+The forum at http://forums.minegoboom.com/ (not run by me) is also a
+helpful resource.
+
+There is documentation available at http://sscx.net/asss/userguide.html.
+There are also several text files in the "doc" directory that might be
+of interest to developers.
+
+To start using this thing, just run asss.bat from the root directory of
+this distribution (the directory that this file is in). Or run
+"bin/asss.exe" from that directory.
+
+You can close it with the sysop command ?shutdown, or just with a
+Ctrl-C.
+
+Note the presence of several empty directories: log, data, and tmp.
+Don't remove any of them, the server needs them to be there to create
+files in.
+
+
+If you want to connect to a billing server, you can either use the
+'billing_ssc' module or the 'billing' module with the proxy. The proxy
+requires a relatively recent (2.1+) version of Python. The billing_ssc
+module is somewhat better tested than the alternative.
+
+
+Known bugs:
+
+asss crashes during shutdown, at least on my system.
+
+
+Contributors:
+
+These are people who have contribued stuff to the actual code. Many
+others have provided support in other forms, and they are thanked in the
+user guide.
+
+Grelminar <grelminar@yahoo.com> - primary author
+Mine GO BOOM <?> - objects, watchdamage, other stuff
+divine.216 <?> - banners
+GiGaKiLLeR <gigamon@hotmail.com> - the turf scoring modules
+Stag Shot <ffl2000vv@yahoo.com> - soccer scoring, game timers
+PriitK <?> - continuum support, ssc biller support
+Catid <?> - many security fixes, mark, file administration, objects
+Smong <?> - misc. documentation and fixes
+Snrrrub <snrrrub@yahoo.com> - misc. fixes and other stuff
+Dr Brain <?> - various contributions
+The Junky <the_junky@extreme-games.net> - alias db enhancements
+Arnk Dylie <?> - various contributions
+D1st0rt <?> - various contributions
+Jowie <?> - patches for bugs
+

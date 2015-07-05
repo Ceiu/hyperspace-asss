@@ -1,0 +1,7 @@
+#!/bin/sh
+# dist: public
+# takes output from backtrace_symbols_fd and figures out better symbolic
+# information for it, using addr2line.
+sed -ne \
+	's/^\([^[(]*\)\(([^)]*)\)\?\[\([0-9a-fx]*\)\]$/addr2line -s -f -e \1 \3/p' \
+	"$@" | sh | sed 'N;s/\(.*\)\n\(.*\)/\2\t\t\1/'

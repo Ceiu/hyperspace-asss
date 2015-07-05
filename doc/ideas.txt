@@ -1,0 +1,168 @@
+
+asss - a small subspace server
+
+the general idea is to make it very modular. so modular that it can serve other
+games too :)  everything will be a plugin, besides the basic network protocols.
+there will be plugins to store persistant data, plugins to authenticate people,
+plugins to handle encryption, plugins to run game types, plugins to handle bricks,
+weapons/specials, chat messages, security, plugins to manage settings and level
+files, news.txt, file transfer, and many more.
+
+what should be possible:
+customized news.txt (maybe)
+keeping local copies of scores
+limited logins
+no ____ in certain areas (anti, weapons, etc)
+greatly simplified setting/level management
+finer-grained access to mod commands
+100% eliminate the need for bots
+any game type can be written as a plugin
+player-to-player file transfer
+player-specific settings (e.g., need 1000 bty to get l3 bombs)
+more mod commands
+
+what the core should look like:
+manages a list of connected clients and a bit of info about them. sends and
+recieves all packets. load and unload plugins (very important!). possibly manage
+memory for them too.
+
+what kind of hooks must there be:
+packet preprocessing and postprocessing (for encryption)
+storing and retrieving persistant data (for local copies of scores, news.txt, etc.)
+authentication
+obviously, looking at the incoming packets
+callbacks to send packets to sets of people
+
+some mechanism for plugins to call each other:
+the idea here is for one plugin to maintain a connection to the billing server
+and expose methods by which other plugins can talk to the billing server.
+this is done because several things go though it: authentication, saving scores,
+some chat messages.
+this would also let a single db connection be shared among plugins.
+
+(very) preliminary list of plugins:
+shared resource:
+  billing
+  mysql
+  configfile
+  log
+encryption:
+  nullenc
+  ssenc
+logins:
+  login
+authentication:
+  nullauth
+  billingauth
+game data:
+  misc (kills, ship/freq changes, turrets)
+  chat
+  flag (wz and rz)
+  turfflag
+  weapon (incl. position packets)
+  brick
+  balls
+  banner
+game types:
+  periodic
+  koth
+file transfer:
+  newstxt
+  mapdl
+
+that should be enough (with odds and ends thrown in where appropriate) to get the
+functionality of the current server, plus a little more. but then we can add:
+  territory (turf-style scoring)
+  alias (log ip & macid for alias checks)
+  shipcheck (ship <--> freq restrictions a la swz)
+  borderguard (keep people and flags inside walls)
+  superstats (log a plethora of statistics to mysql)
+  p2pfile (player-to-player file transfer)
+  chess (plays a game of chess with no lag)
+  elim (runs elim games)
+  zombie
+  minewriter (fun :P)
+  bricklayer (draws pictures and other things with bricks)
+  buy (emulates ?buy and much much more)
+  customset (different settings for different people)
+  console (useful console commands for server hosts)
+  recorder (record games to files to be played back with...)
+  player (plays back recorded games to connected viewers)
+
+platform considerations:
+i think the focus should be on getting it to run well in linux. it should be written so
+it's possible to port to windows, but it's ok if it's missing some features on windows
+(like spawned traceroute and console stuff). it shouldn't have to run on non-intel
+archs, that would be way too much of a pain. multithreaded? i don't think so. too
+confusing.
+
+implementation details:
+the message id number will be a short. there will be numbers for each c2s packet type,
+and then more for server-internal stuff. plugins will be able to send messages to
+other registered plugins. for example, the authentication plugin should register for
+a message id that will let it see packets from the billing server. then for each player
+it should call the method exposed by the billing server to send a packet.
+
+some thoughts:
+as far as i can see right now, it looks like there has to be one major message-passing
+mechanism: a plugin sends a message with a certain id number to all other plugins.
+exposure of methods can be done through this mechanism by having a resource-sharing
+plugin be the only one that registers for a certain message. then other plugins use
+the resource by sending and recieving messages. the only problem is return values.
+this might be solved by some global errno-type variable. or maybe there could be two:
+one (an int) for error conditions, and one (a byte*) for returned data.
+*** IMPORTANT: all message passing is syncronous ***
+
+
+
+UPDATED 01.08.2001:
+Language switched from C++ to C. I just wasn't comfortable with it in C++.
+There was duplication of form, by global data and private class data, and then
+by PluginMain and the constructor. It was getting too messy, which is what I
+used C++ to avoid. So now it's all in C, and I like it. It's much neater and
+cleaner, and the only messiness is in making typedefs for every function that
+goes in the context. This means the plugin mechanism is a bit different. I'm
+calling the pieces modules, and even the stuff like the network interface and
+config file parser will be modules. Module types have blurred a bit. Now, any
+module can register callbacks for anything it wants, and as many as it wants.
+You can have two handlers for packet 42, or even two main loop events. Module
+loading will be very flexible. There can be multiple modules in a .so file,
+and modules can be internal to the binary. The RawPacket thing was just
+unutterably ugly and has been replaced by a standard handler table. There are
+interface structs that are basically comparable to ABC's in C++, but without
+getting ugly with inheritence and stuff. A slight hesitation is that the
+standard "loop through an array of function pointers and call the ones that
+aren't null" is slightly inefficient. And maybe commands should be handled by
+the commandman instead of 20 plugins doing their own strcmp's.
+
+UPDATED 01.28.2001:
+More stuff changed to make me happy. Arrays replaced by linked lists in many
+areas, so there's not as many hard limits. The config module is much nicer
+with a clean interface. The command manager uses a hash table to make it much
+faster (hopefully).
+
+UPDATED 02.04.2001:
+This is just planning, I might make a few changes yet. But I'm going to clean
+up another mess of stuff that was annoying me. All modules will register
+interfaces with a central manager. Other modules will get at their interfaces
+by name. See the paper for more details, and I'll update when I'm done
+rewriting. Potential problem: I might have to decouple the filename<-->module
+name relationship because I want the module name to be the interface name.
+That is, there will be several modules named "config", and one will be loaded
+at a time. The files will be named config_file.c/o and config_db.c/o, and will
+both use config.h. Alternative: separate module name and interface name.
+Meaning: config_file and config_db will be .c and .o filenames AND module
+names, and both can go in the same .so file and even be loaded at once. But a
+request for the "config" interface will return one of them. Problem: it would
+be nice to implement the module manager to use strcasecmp only up to the '_'.
+But then we'll have to rename log_file and log_console, because their
+relationship is technically different. Solution: Make a "RegisterInterface"
+function, and have the modules call it in MM with a string and their
+interface. This isn't as elegant and simple as each module just returning an
+interface, but it's not so bad because it allows for some modules
+(log_console) to have no interface at all. It also allows a single module to
+"be" more  than one thing, by registering more than one interface. I like
+this solution, I think I'm going to do it. I also think I'm reinventing COM
+and CORBA in this little project :)
+
+

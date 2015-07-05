@@ -1,0 +1,51 @@
+#!/bin/sh
+
+set -e
+set -x
+
+umask 022
+
+: using ASSSDIR=${ASSSDIR:=/e/src/asss}
+: using CENCDIR=${CENCDIR:=/e/src/contenc}
+
+cd $ASSSDIR
+
+d="asss-`sed -n 's/#define ASSSVERSION "\(.*\)"/\1/p' src/include/defs.h`"
+
+rm -rf $d
+cp -a dist $d
+mkdir $d/{data,log,tmp}
+
+rm -rf doc/doxygen/*
+tar cf - `grep -lr '[d]ist: public' src scripts doc` scripts/banner.font \
+	src/asss.dev windeps | \
+	(cd $d ; tar xf -)
+
+cp -a ${CENCDIR} $d/src/contenc
+make -C $d/src -f Makefile debug=no opt=yes install
+rm -rf $d/build $d/src/contenc
+
+rm -f $d/README.freebsd
+
+# supply different readmes on windows
+mv -f $d/README.win32 $d/README
+mv -f $d/README.developers.win32 $d/README.developers
+# comment out unixsignal
+sed 's/^unixsignal$/; not on windows: &/' $d/conf/modules.conf > modules.conf.win32
+mv -f modules.conf.win32 $d/conf/modules.conf
+
+find $d -name MT -exec rm -rf {} \; -prune
+find $d -name CVS -exec rm -rf {} \; -prune
+find $d -name .stamp -exec rm -rf {} \; -prune
+
+# let users grab these from python
+rm -f $d/windeps/{python.exe,python*.dll,pythoninc/*}
+
+#find $d -exec touch -r $d/bin/asss.exe {} \;
+
+start //wait zip -v -9 -r $d.zip $d
+
+#exit
+
+rm -rf $d
+

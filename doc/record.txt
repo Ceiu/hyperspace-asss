@@ -1,0 +1,105 @@
+
+notes on the game recording features:
+
+
+the game recorder should be pretty simple. ?startrecord foo.game will
+start recording the current arena to foo.game. ?stoprecord will stop it.
+?playrecord foo.game will start playing it (and possibly lock everone in
+spec for the duration of playback). it might support ?rewind, ?seek
++10 sec, etc.
+
+update: the ?gamerecord command controls everything. seeking is too hard
+and isn't currently working.
+
+it works by recording "events" to a file, and then reading them and
+faking them within the server for playback.
+
+when it starts recording a game, it'll dump the list of everyone in the
+arena to the file header, with their ships and freqs. then it will just
+record events. what's an event?
+
+enter arena (record pid, name, ship, freq)
+leave arena (record pid, name)
+ship change (record pid, ship)
+freq change (record pid, freq)
+kill (record killer, killed, bty, flags)
+chat message (pub and team only) (record pid, type, optional freq, msg)
+incoming position (the biggie) (record pid, position data)
+(record ticks past start of game for all of them)
+
+a special eof event at the end of the recorded game, maybe. (isn't
+currently used.)
+
+
+internal details:
+
+how will it see all the events?
+enter arena: playeraction cb
+leave arena: playeraction cb
+ship change: shipchange cb
+freq change: freqchange cb
+kill: kill cb
+chat message: chat cb
+incoming position: get raw position packets from net
+
+
+how will it play back events?
+enter arena: fake->CreateFakePlayer
+leave arena: fake->EndFaked
+ship change: game->SetFreqAndShip
+freq change: game->SetFreq
+kill: game->FakeKill
+chat message: chat->SendAnyMessage
+incoming position: game->FakePosition
+
+
+how will it write events to a file?
+
+it can do it synchronously, or pass them to a writer thread.
+
+sychronously means it has to wait for file writes sometimes, and worse,
+if we're using zlib, it has to compress them.
+
+passing messages means it has to lock a mutex on every event, which is
+fine for everything but ppks. well, it's probably fine for ppks too,
+since they end up locking tons of outlistmtx's for each one.
+
+update: async isn't so hard, and it's what's currently implemented. each
+recorder gets a thread.
+
+
+how will it read events and play them back?
+
+it can have either a separate thread or a mainloop function.
+update: a separate thread is created for each playing game.
+
+game cleanup:
+	kill all fake players that are part of the playback.
+	send arena message.
+	close file.
+	deallocate structures.
+
+
+
+file format:
+
+update: see record.c
+
+
+
+file size:
+
+assume 20 playing players, so 200 position packets/second.
+lots of spectators and team chat, so say 1 chat msg/second.
+also 1 kill/second.
+
+chat msg = 128+5*4 = 148 bts
+kill = 6*4 = 24 bts
+ppk = 32+3*4 = 44 bts
+
+148+24+44*200 = 8972 bytes/second
+
+assume zlib can get it down to 5k/second.
+
+a one-hour game would take 5*3600k = 18000k = 18 megs
+

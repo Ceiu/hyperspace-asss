@@ -1,0 +1,53 @@
+
+
+[Soccer]
+BallBounce=1        C
+AllowBombs=1        C
+AllowGuns=1         C
+PassDelay=20        C
+Mode=0              C
+BallBlankDelay=200  C
+UseFlagger=1        C
+BallLocation=1      C
+
+BallCount=0         S
+SendTime=400        S
+Reward=1000         S
+CapturePoints=0     S
+CatchMinimum=12     S
+CatchPoints=0       S
+WinBy=0             S
+
+
+BallCount - Number of soccer balls in the arena (0=soccer game off)
+SendTime - How often the balls position is updated
+Reward - Negative numbers equal absolute points given, positive numbers
+         use FlagReward formula.
+CapturePoints - If positive, these points are distributed to each
+                goal/team.  When you make a goal, the points get transferred to your
+                goal/team.  In timed games, team with most points in their goal wins.
+                If one team gets all the points, then they win as well.  If negative,
+                teams are given 1 point for each goal, first team to reach
+                -CapturePoints points wins the game.
+CatchMinimum - ?
+CatchPoints - ?
+WinBy - ?
+
+
+new settings:
+
+GoalDelay - how long after a goal until the ball respawns
+GameDelay - how long after a game is won until the balls respawn
+
+settings that control points:
+
+GameType:
+  SOCCER_FIXED - winning freq gets Reward points
+  SOCCER_REWARD - winning freq gets (players^2 * Reward / 1000)
+  SOCCER_UPTO - play up to Points points
+  SOCCER_CAPTURE - each team starts with Points, capture points if you get a goal
+
+Points - how many points needed to win
+WinBy - in SOCCER_UPTO, you have to win by this many points
+
+

@@ -1,0 +1,51 @@
+
+introduction
+------------
+
+There's source included in the src directory. There are some modules
+that I can't include the source to for various reasons. There's a
+binary of them for windows (bin/security.dll) included. More developer
+documentation is available at http://asss.yi.org/
+
+To build asss, you'll need to download a few extra libraries and programs.
+
+1. Download a recent version of Python from www.python.org and install
+it somewhere.
+
+2. Copy the two files python24.dll and python.exe from the Python
+directory into the windeps directory. If you installed Python
+systemwide, python24.dll might be somewhere in your windows directory.
+
+3. Copy all the files from the include directory of the Python install
+into windeps\pythoninc.
+
+Now building asss should work.
+
+
+contributing
+------------
+
+I welcome contributions of any kind from anyone. That doesn't mean I'll
+put in anything you send me, though. I have a few requests: 1. Don't
+send crap. Take the time to make sure your code is clean and efficient
+in both time and space. 2. Try to stick to my formatting convensions,
+including 1 tab character per indent level, and 80-column line width. 3.
+Send patches in unified diff format. "diff -urN orig-source-tree
+new-source-tree" should do what I want. 4. Email patches to
+grelminar@yahoo.com.
+
+There's a mini-tutorial in doc/tutorial.txt that covers the interface
+stuff. There's a lot more you'll need to know, of course, but it's a
+start.
+
+
+licence
+-------
+
+This code (with a few exceptions, see the LICENSE file) is licensed
+under the GPL. If you're submitting patches to the my code, or code that
+you want to go in my distribution, you should be comfortable with that,
+and licence your code under the GPL also. If you're not, you're free to
+write and distribute your own modules using whatever licensing terms you
+want, but they're not going to go in my distrubution.
+

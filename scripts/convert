@@ -1,0 +1,20 @@
+#!/bin/sh
+# dist: public
+# a stupid script for converting a bunch of subgame .cfg files
+
+for c in "$@"; do
+	b=`echo \`basename $c\` | sed 's/\.cfg$//'`
+	mkdir arenas/$b
+	cp $c arenas/$b/set.cfg
+	echo "
+
+#include set.cfg
+
+[general]
+map=$b.lvl
+attachmodules=fm_normal points_kill
+
+; changed settings:
+" > arenas/$b/arena.conf
+done
+

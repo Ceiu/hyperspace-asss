@@ -1,0 +1,383 @@
+
+extended level file format
+version 0.4
+grelminar@yahoo.com
+------------------------
+
+0. note
+
+this document is a work in progress. it often speaks about things being
+implemented in asss. it's often wrong: implementation of the features
+described in this document is still ongoing, and many features described
+here are not yet implemented.
+
+
+1. background
+
+the basic level format, in use for many years, supports two main pieces
+of data: a bitmapped tileset for the map, and the tile data. the tileset
+bitmap is optional. the file layout is relatively simple: the bitmap
+comes first, if it's present, followed by tile data to the end of the
+file. if the bitmap signature isn't present, applications assume the
+whole file contains tile data.
+
+to support advanced features that are already, or will soon be, possible
+in asss, i'd like to propose a backwards-compatible extension of the
+basic level format.
+
+
+2. goals
+
+the primary goal is to make it possible to embed more metadata in level
+files. this includes descriptive information about the creator of the
+file and its intended use, but also some functional information.
+
+the most important, and complicated, type of metadata that i'd like to
+embed are regions. a region is just a set of tiles, usually but not
+necessarily contiguous, plus some information describing how the server
+(and maybe eventually the client) should treat that set of tiles.
+
+
+3. file format
+
+3.1. embedding metadata in lvl files
+
+currently, level files have one of two formats:
+
+    <bitmapfileheader>
+    <bitmapinfoheader>
+    <color table>
+    <bitmap data>
+    <tile data>
+
+or just:
+
+    <tile data>
+
+for now, i'm just going to talk about level files that contain tilesets.
+tileset-less files will be discussed later.
+
+to preserve backwards compatibility with all the programs that read or
+write level files (subspace, continuum, ssme, ssled, facts, subgame,
+etc.), the beginning of the file will have to remain the same. the tile
+data will also have to remain the last item in the file, since all the
+level-file-reading code assumes that all the data from a specific point
+to the end of the file is tile data. thus, the new data will have to be
+inserted in the middle of the file, making it look like this:
+
+    <bitmapfileheader>
+    <bitmapinfoheader>
+    <color table>
+    <bitmap data>
+    <metadata/regions>    <-- new stuff
+    <tile data>
+
+the trick that makes this work is the fact that the bitmapfileheader
+contains a field that specifies the total file size, which programs use
+to locate the start of the tile data. (at least i hope they do. if any
+program assumes the tile data directly follows the bitmap data, these
+extended files will break it.) another nice feature is that header also
+contains 4 bytes of reserved space, which we will use to point to the
+metadata section.
+
+for reference, the windows BITMAPFILEHEADER struct looks like this:
+
+struct BITMAPFILEHEADER {
+    u16 bfType;         // == 0x4D42 ("BM")
+    u32 bfSize;         // the total size of the file, which is also
+                        // the offset of the tile data
+    u16 bfReserved1;    // previously reserved, but we're going to
+                        // use this for our format
+    u16 bfReserved2;    // this one is still unused, should be 0
+    u32 bfOffBits;      // the offset to the bitmap data
+};
+
+so, to make an extended level file, lay out your two bitmap headers,
+color table, and bitmap data as before, then the metadata section, and
+finally the tile data. the metadata section should be aligned to start
+at a multiple of 4 bytes from the start of the file, so you might need
+0-3 bytes of padding between the end of the bitmap data and the start of
+the metadata. the metadata section will always be a multiple of 4 bytes
+long, so the tile data will also always start on a multiple of 4 bytes.
+
+set the bfReserved1 field to the byte position of the start of the
+metadata section. typically, this will be 49720 bytes. also, the bfSize
+value, which was previously almost always 49718, will now point to the
+tile data, which will be located right after the extended metadata. so
+for a file containing 4000 bytes of metadata, bfSize will be 53720.
+
+note that this means from the perspective of a program that only
+understands bmp files, or one that only understands plain lvl files, the
+metadata is part of the bitmap. it just happens that the bitmap contains
+more bits than is necessary for its dimensions and color depth.
+
+to make an extended level file without a tileset, you simply start off
+the file with the metadata chunk, followed by the tile data. WARNING:
+currently no programs except asss understand extended level files
+without tilesets.
+
+
+3.2. metadata format
+
+now, the format of the metadata section itself. this is designed to be
+extensible, so new features can get added to lvl files without
+redefining the whole format. it's somewhat inspired by the png file
+format, which was inspired by iff, etc.
+
+first, there's a header:
+
+struct metadata_header {
+    u32 magic;          // == 0x6c766c65 ("elvl", for "extended lvl")
+    u32 totalsize;      // the number of bytes in the whole metadata section
+    u32 reserved;       // reserved, should be 0
+};
+
+magic should always be equal to 0x6c766c65. if it isn't, the file is
+incorrect or corrupted. incidentally, the magic value is how extended
+level files without tilesets can be identified. (that is, an initial
+"BM" means an initial tileset, which may or may not contain extended
+data, an initial "elvl" means an extended level file without a tileset,
+and anything else is a plain level file without a tileset.) also note
+that the magic value is an illegal value for tile data.
+
+totalsize is the number of bytes in the whole metadata section,
+including the header. note that the tile data will start at an offset of
+totalsize bytes from the start of the metadata_header.
+
+directly following the header is a series of "chunks". there is no limit
+to the number of chunks. each chunk contains a chunk header:
+
+struct chunk_header {
+    u32 type;   // describes what this chunk represents
+    u32 size;   // the number of bytes in the data portion of this
+                // chunk, _not_ including the header.
+};
+
+the header is followed by arbitrary data whose interpretation is
+determined by the chunk type. the data portion of a chunk may be of any
+length, including 0 bytes and odd numbers of bytes. if a chunk isn't a
+multiple of 4 bytes long, it should be padded up to a multiple of 4
+bytes so that the next chunk starts on a 4-byte boundary (but the
+padding isn't counted in the size field, it's just understood to be
+there).
+
+an application can ignore chunk types that it doesn't know about. if
+it's an editor that's loading and saving elvl files, it should probably
+save the extra chunks and write them back to the file when it gets
+saved.
+
+there are several chunk types defined so far:
+
+"ATTR" - defines a textual attribute
+"REGN" - defines a region
+"TSET" - defines a tileset
+"TILE" - defines tile data
+
+i'll describe their function and format one by one:
+
+3.2.1. "ATTR" chunks
+
+these define miscelaneous textual attributes. the format is ascii text,
+not null terminated, in this form: "<key>=<value>". each "ATTR" chunk
+should contain just one key/value pair. multiple chunks of this type may
+be present in one file.
+
+some keys that might be typically found in a level file are:
+
+"NAME" - a descriptive name for this map
+"VERSION" - a version number for this map
+"ZONE" - the zone this file is intended to be used with
+"MAPCREATOR" - the person who created this map (the format of the value
+               should be "name <email>")
+"TILESETCREATOR" - the person who created the tileset
+"PROGRAM" - the name of the program that was used to create this level
+            file
+
+3.2.2. "REGN" chunks
+
+these chunks define regions. to recap, a region is a set of tiles,
+usually but not always contiguous, with certain properties. asss
+understands regions and can implement some advanced features using them.
+currently continuum doesn't understand regions, but it would be nice if
+it did, and we'll be able to do even cooler things when it does.
+
+there's a lot of stuff that you might want to say about a region, so to
+support all the varied uses, and also future uses, we'll use the chunk
+model again: each region gets its own set of "subchunks" describing its
+function. to avoid confusion, all sub-chunk types that go inside the
+"REGN" superchunk start with "r". the data of the big "REGN" chunk is
+simply a series of subchunks.
+
+here are some defined sub-chunk types:
+
+"rNAM" - a descriptive name for the region
+"rTIL" - tile data, the definition of the region
+"rBSE" - whether the region represents a base in a flag game
+"rNAW" - no antiwarp
+"rNWP" - no weapons
+"rNFL" - no flag drops
+"rAWP" - auto-warp
+"rPYC" - code to be executed when a player enters or leaves this region
+
+3.2.2.1. "rNAM" chunks
+
+this is just a plain ascii string, not null terminated. every chunk
+should have exactly one of these.
+
+3.2.2.2. "rTIL" chunks
+
+this subchunk describes the tiles that make up the region. it's stored
+in a compact rle-ish representation.
+
+conceptually, a region is some subset of the 1024x1024 tiles in the map.
+to encode a region, encode it row by row, left to right, top to bottom.
+
+for each row, split it into runs of empty tiles and present tiles. for
+each run, output one of these bit sequences:
+
+    000nnnnn          - n+1 (1-32) empty tiles in a row
+    001000nn nnnnnnnn - n+1 (1-1024) empty tiles in a row
+    010nnnnn          - n+1 (1-32) present tiles in a row
+    011000nn nnnnnnnn - n+1 (1-1024) present tiles in a row
+
+for the two-byte sequences, the bits in the second byte are the low
+bits, and the two bits at the end of the first byte are the high bits.
+
+for example, if you have a run of 10 present tiles, you'd output the
+byte 01001001, or 73 decimal. if you have a run of 300 empty tiles,
+you'd output 00100001 00101011, or 33 43.
+
+for each row, you must output a sequence of runs that sum to exactly
+1024 tiles. anything else (missing tiles at the end of a row, or a run
+that extends past the end of the line) is an error.
+
+there are two exceptions to the above rule: first, rows that contain no
+tiles at all can (optionally) be encoded specially:
+
+    100nnnnn          - n+1 (1-32) rows of all empty
+    101000nn nnnnnnnn - n+1 (1-1024) rows of all empty
+
+second, if the same pattern of tiles appears in more than one
+consecutive row, you can use these special codes to save more space:
+
+    110nnnnn          - repeat last row n+1 (1-32) times
+    111000nn nnnnnnnn - repeat last row n+1 (1-1024) times
+
+the rTIL chunk must describe exactly 1024 rows. this might require only
+two bytes (163 255 for the totally empty region), or it might require
+much more.
+
+note: several bit patterns don't correspond to any of the above codings.
+that's deliberate. don't use them.
+
+3.2.2.3. "rBSE" chunks
+
+this is a 0-byte chunk. its presence signifies that this region should
+be considered a "base".
+
+3.2.2.4. "rNAW" chunks
+
+this is a 0-byte chunk. if present, antiwarp should be disabled for
+ships in this region. currently, this disabling happens on the server,
+and players whose antiwarp is being disabled aren't necessarily aware of
+it. it would be nice if in the future continuum understood this feature
+so that it could inform the player that antiwarp is unavailable in this
+location.
+
+3.2.2.5. "rNWP" chunks
+
+this is a 0-byte chunk. if present, all weapons are non-functional in
+this region. the same notes apply to this feature as to the no antiwarp
+feature.
+
+3.2.2.6. "rNFL" chunks
+
+this is a 0-byte chunk. if present, any flags dropped in this region are
+respawned as neutral flags in the center of the map (or wherever the
+settings indicate they should be spawned).
+
+3.2.2.7. "rAWP" chunks
+
+this chunk, if present, turns on the auto-warping feature. any player
+entering this region will be immediately warped to the specified
+destination.
+
+the data for this chunk specifies the destination, in this format:
+
+struct autowarp_destination {
+    i16 x;           // the destination x coordinate, 1-1023, 0 for the
+                     // default, or -1 for the player's current x coordinate.
+    i16 y;           // the destination y coordinate.
+    char arena[16];  // the destination arena name. null if the warp
+                     // does not cross arenas.
+};
+
+as a simple space optimization, if the warp does not cross arenas, you
+can leave out the 16 bytes of arena name, so that the whole chunk data
+is 4 bytes long.
+
+3.2.2.8. "rPYC" chunks
+
+this chunk lets you embed code in level files. the exact semantics of
+this data haven't yet been determined, but it'll probably go something
+like this:
+
+this chunk should contain ascii data representing some python code. the
+code will be executed when the map is loaded, and it may define several
+functions: a function named "enter", if it exists, will be call each
+time a player enters this region. it will be called with one argument,
+which is the player who entered the region. a function named "exit"
+works similarly, except of course it gets called when someone leaves.
+
+
+3.2.3. "TSET" and "TILE" chunks
+
+these chunk types are intented to be used only in the far future, when
+all lvl files use the extended format, and the backwards-compatible
+format described so far doesn't have to be used. such files will start
+with the "elvl" metadata header described above, and they will contain
+the tileset bitmap and tile data as chunks.
+
+the format of a "TSET" chunk is a windows format bitmap, _without_ the
+bitmapfileheader stuff (because its function is taken care of by the
+chunk header). that is, it starts with a bitmapinfoheader, which is
+followed directly by the color table, which is followed directly by the
+bitmap data. the bitmap data should be in 8-bit format with no
+compression.
+
+the format of a "TILE" chunk is just tile data, in the same format it's
+always been in:
+
+struct tile {
+    unsigned x : 12;   // range 0-1023, upper two bits should be 0
+    unsigned y : 12;
+    unsigned tile : 8;
+};
+
+there should be no more than one of each of these chunks in a file. one
+file should not contain both an ETST and a TSET chunk. if a file
+contains neither of those two types, the default tileset should be used.
+
+
+4. comments
+
+if you have an suggestions for improving the file format or this
+document, email them to grelminar@yahoo.com, or post them on the forums
+at http://forums.minegoboom.com/
+
+
+5. history
+
+version 0.3:
+  - removed ETST chunks, since cont basically supports this
+    functionality already through tiles.bm2
+
+version 0.2:
+  - better format for region tile data
+
+version 0.1:
+  - initial version
+
+
+# dist: public
+

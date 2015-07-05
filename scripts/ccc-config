@@ -1,0 +1,48 @@
+
+# put this in ~/.ccc-config
+
+# profiles
+
+testzone = """
+	server = 'server.sscx.net'
+	port = 5000
+	name = '...'
+	password = '...'
+	chats = '...'
+	arena = '0'
+	#init = '?version'
+	logfile = '~/logs/ccc-%Y-%m'
+	#keepalive = 180  # only if you need it
+"""
+
+default = testzone
+
+# automatically set up windows for chats
+chatwindows = 1
+# automatically create windows for priv msgs, etc.
+automkwin = 1
+# create an "all" window
+# allwindow = 1
+
+# bindings
+
+# these should bind ctrl-pgup/dn and alt-pgup/dn on a recent xfree86 xterm
+# bind('^[[5;5~', scroll_up, 5)
+# bind('^[[6;5~', scroll_down, 5)
+# bind('^[[5;3~', scroll_up, 15)
+# bind('^[[6;3~', scroll_down, 15)
+
+# colors
+
+# need a 256-color xterm for these
+# color('sysop', 197)
+# color('arena', 120)
+# color('info', 63)
+# color('priv', 118)
+
+# ignore list
+
+# ignore('annoying person')
+
+# dist: public
+

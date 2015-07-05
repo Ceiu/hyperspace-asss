@@ -1,0 +1,58 @@
+
+new threading model for asss
+----------------------------
+
+how the net module works:
+
+buffer lists are maintained as doubly linked circular linked lists
+there is a free list, a reliable list, and an outgoing list
+
+recv thread:
+	recieves packets with recvfrom
+	if they are unreliable, process them in place.
+	if not, process them with one of the oohandlers
+		if the oohandlers come up with a packet to process (03, 09, 0A,
+		0E), they will add it to the reliable list or process it in
+		place.
+
+send thread:
+	scan list, looking for packets that need to be sent/resent and send
+	them. also free buffers for outgoing packets whose target players
+	have disappeared.
+
+reliable thread:
+	scan reliable list and find packets that are ready to be processed
+	process them
+
+outgoing packets:
+	all of the send functions will put packets onto the outgoing list
+	scan out list and 
+
+
+locks:
+	there's one lock for each of the big lists
+
+
+LOCKING IN THE REST OF THE SERVER
+---------------------------------
+
+There are big locks for player status and arena status flags. You must hold
+these to read or write the status info. If you want to read only and can
+accept discrepencies (e.g. you're counting players), you can get away without
+locking.
+
+There's a lock for each player also, which you should have if you are reading
+or writing to the player's structure. Those locks are recursive, and they are
+already held during packet handler functions (the network layer does it).
+
+The big important locking order, from first aquired, is:
+
+individual player locks
+arena status
+player status
+(network hash tables)
+
+Acquire locks in this order to avoid deadlock.
+
+Use the pthreads api for anything thread-related. It's portable.
+

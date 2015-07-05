@@ -1,0 +1,1257 @@
+
+\documentclass{article}
+
+% enlarge the page a bit
+\addtolength{\hoffset}{-1cm}
+\addtolength{\textwidth}{1.6cm}
+
+% make new commands to enforce some style
+\newcommand{\asss}{\texttt{asss}}
+\newcommand{\subgame}{\texttt{subgame}}
+
+\title{\asss{} Developer's Guide -- 1.4.2}
+%\author{Grelminar \texttt{<grelminar@yahoo.com>}}
+
+\begin{document}
+
+\maketitle
+
+\section{Introduction}
+
+If you're reading this, you probably already know that \asss{} is a
+server for the multiplayer game \emph{Subspace}, written mostly in C and
+Python. This document will try to help you to understand how \asss{}
+works internally and how to develop for it.
+
+There are three types of things you might want to do with \asss{}:
+modify the existing source (the stuff in the core distribution), write
+new modules from scratch in C, and write new modules from scratch in
+Python. You're welcome to do any of those three things, depending on
+your goals, but I'd like to encourage people to try to write new modules
+in Python if possible, and only use C if there's a good reason for it
+(efficiency concerns, linking with other libraries, etc.). Don't let the
+fact that you don't know Python discourage you; it's a very easy
+language to learn. Also don't be discouraged by the current
+incompleteness of the Python interface to \asss{}. It will improve as
+users submit requests for things that they need added to it.
+
+
+\section{Building}
+
+If you want to build all of \asss{} from scratch, there are a few
+dependencies you need to be aware of: Python, version 2.2 or greater,
+Berkeley DB, version 4.0 or greater, and the mysql client libraries (any
+recent version should be ok). If you're building on a unix system,
+you'll need to use GNU make.
+
+The basic procedure is to edit the definitions at the top of the
+provided \verb/Makefile/ to point to the directories where your
+libraries are installed. After that, running \verb/make/ should build
+all of \asss{}, which consists of a binary named \verb/asss/ and a bunch
+of \verb/.so/ files containing the modules. Running \verb/make install/
+will copy those binaries to the \verb/bin/ directory one level up.
+
+If you're missing one or more of those libraries, you can still build
+the remaining parts of \asss{}: Edit the \verb/have_xxx = yes/ lines
+near the top of the Makefile to indicate which libraries you're missing.
+
+
+\subsection{Building on Windows}
+
+This is now relatively easy. You'll need to download the Dev-C++ IDE,
+and also the windows package of Python (2.3.4 is good). You'll have to
+copy a few files somewhere (the details are explained in one of the
+files supplied with the windows package), and then open up the Dev-C++
+project and everything should work well.
+
+
+\subsection{Building on FreeBSD}
+
+You'll have to change a few lines in the Makefile, but this is
+relatively straightforward. Ask me for a copy of \verb/security.so/
+compiled for FreeBSD.
+
+
+\section{Basic Architecture}
+
+I had several goals when designing \asss{}: It should be modular, so
+that server admins could plug in their own custom functionality in
+addition to or in place of any part of the server. It should support
+runtime loading, so functionality could be added, removed, and upgraded
+without taking down the server. It should be robust and efficient.
+
+Those goals led to a design that might look a little scary at first, but
+is actually pretty simple if you put a little effort into understanding
+it. However, there's a lot of indirection, and it can be difficult to
+understand the control flow in certain places, because of the pervasive
+use of callbacks. Hopefully this document can provide enough information
+that anyone can understand how it all works, and more importantly, can
+figure out how to modify or extend it to do what they want.
+
+The three main pieces of the architecture are modules, interfaces, and
+callbacks.
+
+\subsection{Modules}
+
+Almost all of the code in \asss{} is part of a module (just about
+everything except \verb/main.c/, \verb/module.c/, \verb/cmod.c/, and
+\verb/util.c/). A module is just a piece of code that runs as part of
+the server. Modules can currently be written in either C or Python.
+
+Some examples of modules are \verb/core/, which manages player logins
+and other really important bits, \verb/flags/, which manages the flag
+game, \verb/buy/ which provides an implementation of the \verb/?buy/
+command, \verb/pymod/ which allows Python modules to exist, and
+\verb/persist/, which provides database services for the rest of the
+server.
+
+Modules written in C have a single entry point function.
+
+Modules by themselves can't do very much. In order to be useful, modules
+have to talk to other modules. The two main ways for modules to
+communicate are interfaces and callbacks.
+
+\subsection{Interfaces}
+
+An interface in \asss{} is just a set of function signatures. They're
+implemented by C structs containing function pointers (and rarely,
+pointers to other types of C data). Each interface has an identifier (a
+string, although a C macro is used to hide the actual value of the
+string), and the identifier contains a version number. If the contents
+of an interface is changed, the version number should be incremented.
+
+Interfaces are used for two slightly different purposes in \asss{}: they
+are used for exporting functionality from one module to others, and they
+are used for customizing a specific part of the server's behavior. Both
+uses used the same set of functions, although in slightly different
+ways, so you should be aware of the differences.
+
+The module manager (one of the pieces of \asss{} that isn't in a module
+itself) manages interface pointers for the whole server. It has several
+available operations, which are exposed through an interface of its own:
+
+\begin{itemize}
+
+\item A module can register an interface for other modules to use. To do
+this, it creates a struct and initializes its fields with pointers to
+the functions it's going to use to implement the interface. (Almost
+always , this struct will be statically allocated.) A special macro is
+used to provide the identifier of the interface that this struct is
+going to implement, and also to provide a unique name for this
+implementation. Then the \verb/RegInterface/ function of the module
+manager interface is called.
+
+An interface can be registered globally for the whole server, or
+registered for a single arena only.
+
+\item A module can unregister an interface that it has previously
+registered, using \verb/UnregInterface/. The same arena pointer that is
+passed into \verb/RegInterface/ should be passed into this function.
+Note that unregistering an interface can fail! See below about reference
+counts.
+
+\item A module can request a pointer to an implementation of an
+interface, given the interface identifier, using \verb/GetInterface/.
+
+\item A module can request a pointer to a specific implementation of an
+interface, with \verb/GetInterfaceByName/.
+
+\item A module can return a reference to an interface that it acquired
+with one of the previous two functions, using \verb/ReleaseInterface/.
+
+\end{itemize}
+
+\subsubsection{Reference counts}
+
+Implementations of interfaces are reference counted. A module that calls
+either of the \verb/GetInterface/ calls that returns a valid pointer
+owns a reference to that implementation, and must later return it with
+\verb/ReleaseInterface/. Calling \verb/UnregInterface/ on an interface
+pointer will fail if there are any outstanding references to that
+pointer (and it will return the number of references).
+
+
+\subsubsection{Arena-specific interfaces}
+
+The functions \verb/RegInterface/, \verb/UnregInterface/, and
+\verb/GetInterface/ all take an optional arena pointer. Interfaces that
+serve only to export functionality will generally be registered globally
+for the whole server, and there is only one possible implementation for
+each of them. To register an interface globally, or to request a
+globally registered interface, the macro \verb/ALLARENAS/ should be
+passed as the arena pointer.
+
+Interfaces that are used to select among different behaviors might be
+registered per-arena. Passing a pointer to a valid arena to
+\verb/RegInterface/ makes that interface pointer available only to
+modules who call \verb/GetInterface/ with that arena. If a module calls
+\verb/GetInterface/ with a valid arena pointer, but there is no
+interface pointer with that id registered for that arena, it will fall
+back to an interface registered globally with that id, if possible. That
+allows a module to register a "default" implementation for an interface,
+and let other modules override it for specific arenas.
+
+
+\subsubsection{Example: declaring, using, and defining interfaces}
+
+\paragraph{Declaring}
+Here's a sample declaration of an interface, taken from \verb/core.h/:
+
+\begin{verbatim}
+#define I_FREQMAN "freqman-1"
+
+typedef struct Ifreqman {
+    INTERFACE_HEAD_DECL
+    void (*InitialFreq)(Player *p, int *ship, int *freq);
+    void (*ShipChange)(Player *p, int *ship, int *freq);
+    void (*FreqChange)(Player *p, int *ship, int *freq);
+} Ifreqman;
+\end{verbatim}
+
+The definition on the first line creates a macro that will be used to
+refer to the interface identifier (which consists of the string
+``\verb/freqman/'' followed by a version number). By convention,
+interface id macros are named \verb/I_<something>/, and identifier
+strings are \verb/<something>-<version>/.
+
+Next, a C typedef is used to create a type for a struct. By convention,
+struct types start with a capital \verb/I/ followed by the interface
+name in lowercase. The first thing in the struct is a special macro
+(\verb/INTERFACE_HEAD_DECL/) that sets up a few special fields used
+internally by the interface manager. The three fields are declared as
+function pointers using standard C syntax.
+
+\paragraph{Using}
+To call a function in this interface, a module might use code like this
+(adapted from \verb/core.c/):
+
+\begin{verbatim}
+int freq = 0, ship = player->p_ship;
+Ifreqman *fm = mm->GetInterface(I_FREQMAN, player->arena);
+if (fm) {
+    fm->InitialFreq(player, &ship, &freq);
+    mm->ReleaseInterface(fm);
+}
+\end{verbatim}
+
+This code declares a pointer to a freq manager interface, and requests
+the registered implementation of the freq manager interface for the
+arena that the player is in. If it finds one, it calls a function in it
+and then releases the pointer.
+
+The freq manager interface is of the kind used to select among alternate
+behavior. For interfaces used for exporting functionality, typically a
+module will call \verb/GetInterface/ for all the interfaces it needs
+when it loads, and then keep the pointers until it unloads, at which
+point it calls \verb/ReleaseInterface/ on all of them.
+
+\paragraph{Defining}
+
+This is a trivial implementation of the freq manager interface, used by
+the recorder module to lock all players in spectator mode:
+
+\begin{verbatim}
+local void freqman(Player *p, int *ship, int *freq)
+{
+    *ship = SPEC;
+    *freq = 8025;
+}
+
+local struct Ifreqman lockspecfm =
+{
+    INTERFACE_HEAD_INIT(I_FREQMAN, "fm-lock-spec")
+    freqman, freqman, freqman
+};
+\end{verbatim}
+
+First the functions that will implement the interface are defined. In
+this case, one real function is being used to implement three functions
+in the interface. Then a static struct is declared to represent the
+implementation. The first thing in the struct initializer is a macro,
+analogous to the macro used in the declaration.
+\verb/INTERFACE_HEAD_INIT/ takes two arguments: the first is the
+interface identifier, and the second is the unique name given to this
+implementation.
+
+
+\subsection{Callbacks}
+
+Callbacks are somewhat simpler than interfaces, although they share many
+features. A callback is a single function signature, along with an
+identifier. Callback identifiers aren't versioned, but they probably
+should be.
+
+Like interfaces, callbacks are also managed by the module manager. They
+can be registered globally or for a single arena. Unlike interfaces,
+many callbacks registered to the same identifier can exist at once, and
+all are used. The module manager functions dealing with callbacks are:
+
+\begin{itemize}
+
+\item To register a callback, use \verb/RegCallback/, which takes a
+callback id, a function to call, and an arena to register it to. Like
+interfaces, use \verb/ALLARENAS/ to indicate a globally registered
+callback.
+
+\item Use \verb/UnregCallback/ to unregister a callback. It should be
+called with the same arguments as \verb/RegCallback/.
+
+\item To query which callbacks are currently registered for an
+identifier, use \verb/LookupResult/. They will be returned as a list.
+
+\item After using the list, use \verb/FreeLookupResult/ to return the
+memory used by the list.
+
+\item Instead of using the last two functions, almost everyone will want
+to use the \verb/DO_CBS/ macro that handles the list and looping stuff.
+
+\end{itemize}
+
+
+\subsubsection{Example: declaring, defining, and calling a callback}
+
+\paragraph{Declaring}
+Here's how the flag win callback is declared:
+
+\begin{verbatim}
+#define CB_FLAGWIN "flagwin"
+typedef void (*FlagWinFunc)(Arena *arena, int freq);
+\end{verbatim}
+
+There's a macro (the naming convention is to start callback macro names
+with \verb/CB_/), and a C typedef giving a name to the function
+signature. All callbacks should return void.
+
+\paragraph{Defining}
+To register a function to be called for this event:
+
+\begin{verbatim}
+local void MyFlagWin(Arena *arena, int freq)
+{
+    /* ... contents of function ... */
+}
+
+/* somewhere in the module entry point */
+mm->RegCallback(CB_FLAGWIN, MyFlagWin, ALLARENAS);
+\end{verbatim}
+
+\paragraph{Calling}
+There is a special macro provided to make calling callbacks easier:
+\verb/DO_CBS/. To use it, you must provide the callback id, the arena
+that things are taking place in (or \verb/ALLARENAS/ if there is no
+applicable arena), the C type of the callback functions, and the
+arguments to pass to each registered function. It looks like:
+
+\begin{verbatim}
+    DO_CBS(CB_FLAGWIN, arena, FlagWinFunc, (arena, freq));
+\end{verbatim}
+
+
+\section{Important data structures}
+
+There are several important structures that you'll need to know about to
+do anything useful with \asss{}. This section will describe each of them
+in detail.
+
+\subsection{Player}
+
+The \verb/Player/ structure is one of the most important in \asss{}.
+There's one of these for each client connected to the server. These
+structures are created and managed by the \verb/playerdata/ module. (The
+details of when exactly in the connection process a player struct is
+allocated is covered below, in the section on the player state machine.)
+
+The first part of the player struct, which contains many important
+fields, is actually in the format of the packet that gets sent to
+players to inform them about other players. The benefit of using the
+packet format directly to store those fields is that there's no copying
+necessary when the packet needs to be sent, as the necessary information
+is already in the right format.
+
+The format of the player data packet, and then the main player struct,
+will be given below, and then each field will be covered in detail.
+
+\begin{verbatim}
+struct PlayerData {
+    u8 pktype;
+    i8 ship;
+    u8 acceptaudio;
+    char name[20];
+    char squad[20];
+    i32 killpoints;
+    i32 flagpoints;
+    i16 pid;
+    i16 freq;
+    i16 wins;
+    i16 losses;
+    i16 attachedto;
+    i16 flagscarried;
+    u8 miscbits;
+};
+
+struct Player {
+    PlayerData pkt;
+#define p_ship pkt.ship
+#define p_freq pkt.freq
+#define p_attached pkt.attachedto
+    int pid, status, type, whenloggedin;
+    Arena *arena, *newarena;
+    char name[24], squad[24];
+    i16 xres, yres;
+    ticks_t connecttime;
+    struct PlayerPosition position;
+    u32 macid, permid;
+    char ipaddr[16];
+    const char *connectas;
+    char clientname[32];
+    struct {
+        unsigned authenticated : 1;
+        unsigned during_change : 1;
+        unsigned want_all_lvz : 1;
+        unsigned during_query : 1;
+        unsigned no_ship : 1;
+        unsigned no_flags_balls : 1;
+        unsigned sent_ppk : 1;
+        unsigned sent_wpn : 1;
+        unsigned see_all_posn : 1;
+        unsigned see_own_posn : 1;
+        unsigned leave_arena_when_done_waiting : 1;
+        unsigned padding1 : 21;
+    } flags;
+    byte playerextradata[0];
+};
+\end{verbatim}
+
+Details on the specific fields of the player data packet:
+
+\begin{description}
+
+\item[pktype] The type byte for the player data packet.
+
+\item[ship] The ship that the player is in. 0 for Warbird, 8 for
+spectator.
+
+\item[acceptaudio] Whether the player is willing to accept .wav
+messages.
+
+\item[name] The player's name. Note: this field is \emph{not}
+necessarily null-terminated.
+
+\item[squad] The player's squad. Note: this field is \emph{not}
+necessarily null-terminated.
+
+\item[killpoints, flagpoints] Part of the player's score. Note that
+\asss{} doesn't use these fields as the authoritative score, and in the
+future, they might be unused entirely.
+
+\item[pid] An identifier for the player. Pids are used extensively in
+the game protocol, but not used much internally in the server.
+
+\item[freq] The player's frequency.
+
+\item[wins, losses] More parts of the score. See notes on killpoints and
+flagpoints.
+
+\item[attachedto] Contains the pid of the player that this player is a
+turret on.
+
+\item[flagscarried] The number of flags that the player is holding. This
+field isn't guaranteed to be accurate, and is only used to help the
+client figure out where the flags are when it first enters.
+
+\item[miscbits] Currently, this field is used only for specifying
+whether the player has a King-of-the-Hill crown or not.
+
+\end{description}
+
+Details on the specific fields of the player structure:
+
+\begin{description}
+
+\item[pkt] This is the player data packet described above.
+
+\item[p\_ship] This ``virtual'' field refers to the ship field of pkt.
+
+\item[p\_freq] This ``virtual'' field refers to the freq field of pkt.
+
+\item[p\_attached] This ``virtual'' field refers to the attachedto field
+of pkt.
+
+\item[pid] The player id of the player. It should always agree with the
+pid value in pkt.
+
+\item[status] The current state of the player. See the description of
+the player state machine below. State values are named with an initial
+\verb/S_/.
+
+\item[type] The client type of this player. Possible values are
+\verb/T_UNKNOWN/, \verb/T_FAKE/ (a fake player created and managed by
+the server, used for autoturrets), \verb/T_VIE/ (a Subspace 1.34 or 1.35
+client), \verb/T_CONT/ (a Continuum client), or \verb/T_CHAT/ (a client
+using the chat protocol).
+
+\item[whenloggedin] This field is used by the player state machine to
+make the proper transitions when a player is logging out.
+
+\item[arena] A pointer to the arena that this player is in. It may be
+null if the player isn't in an arena yet, or is between arenas.
+
+\item[newarena] The arena that they player will eventually enter, once
+the arena is done loading and the player has his scores and stuff loaded
+from the db.
+
+\item[name] The player's name, guaranteed to be null terminated.
+
+\item[squad] The player's squad, guaranteed to be null terminated.
+
+\item[xres, yres] The player's screen resolution. Only valid when arena
+is not null and for standard (\verb/T_VIE/ and \verb/T_CONT/) clients.
+
+\item[connecttime] The time when the player first connected (in ticks).
+
+\item[position] The last known position of the player. This contains a
+few self-explanatory fields: x, y, xspeed, yspeed, and bounty. It also
+contains a status field, which is a bitfield of various ship equipment.
+
+\item[macid, permid] Various identifying values provided by standard
+clients.
+
+\item[ipaddr] A textual representation of the IP address the client is
+connected from.
+
+\item[connectas] If the player has connected to a virtual server that
+specifies a default arena name, this will point to that name. Otherwise
+it will be null.
+
+\item[clientname] Some indication of what client this player is using to
+connect.
+
+\item[flags] These are a bunch of one-bit flags that are used throughout
+the server:
+
+\begin{description}
+
+\item[authenticated] If the player has been authenticated by either a
+billing server or a password file.
+
+\item[during\_change] Set when the player has changed freqs or ships,
+but before he has acknowledged it.
+
+\item[want\_all\_lvz] If the player wants optional .lvz files.
+
+\item[during\_query] If the player is waiting for db query results.
+
+\item[no\_ship] If the player's lag is too high to let him be in a ship.
+
+\item[no\_flags\_balls] If the player's lag is too high to let him have
+flags or balls.
+
+\item[sent\_ppk] If the player has sent a position packet since entering
+the arena.
+
+\item[sent\_wpn] If the player has sent a position packet with weapons
+since entering the arena. Used to implement
+spec-on-n-deaths-without-firing.
+
+\item[see\_all\_posn] If the player is a bot who wants all position
+packets.
+
+\item[see\_own\_posn] If the player is a bot who wants to get mirror
+position packets for himself.
+
+\item[leave\_arena\_when\_done\_waiting] This has to do with the state
+machine, and is used to make people exit cleanly if they're disconnected
+before scores come back from the database.
+
+\end{description}
+
+\item[playerextradata] This variable-length array is carved up by the
+player manager to store per-player data for other modules in the server.
+See the section on per-player data below.
+
+\end{description}
+
+
+\subsection{Arena}
+
+Compared to players, the arena struct is relatively simple. Arenas are
+often used solely by comparing pointers for equality, although there are
+several useful fields:
+
+\begin{verbatim}
+struct Arena {
+    int status;
+    char name[20], basename[20];
+    ConfigHandle cfg;
+    int specfreq;
+    byte arenaextradata[0];
+};
+\end{verbatim}
+
+\begin{description}
+
+\item[status] Stores the loading/unloading state of the arena. Most
+arenas will be in \verb/ARENA_RUNNING/.
+
+\item[name] This is the arena's actual name, used for displaying to
+clients, keeping track of non-shared scores, and many other things.
+
+\item[basename] This is a name derived from the arena name, but will
+trailing digits stripped off (for public arenas, whose ``name'' field
+contains only digits, the ``basename'' field contains the word
+``public''). This is used for keeping track of shared scores and for
+locating settings for the arena.
+
+\item[cfg] This is a handle for the arena's main configuration file.
+There is only one configuration file loaded by default for each arena,
+although it may include other files, and modules may load different
+configuration files themselves.
+
+\item[specfreq] This field is a concession to practicality. The
+``Team:SpectatorFrequency'' setting was being queried in several places
+in different modules, so rather than duplicate work, this setting is
+provided here for modules to use without querying the configuration
+file.
+
+\item[arenaextradata] Like ``playerextradata,'' this variable-sized
+array is managed by the arena manager to provide per-arena space for
+other modules.
+
+\end{description}
+
+
+\subsection{Target}
+
+A target is a (sometimes implicit) representation of a set of players.
+Currently, targets are used as a parameter to command callbacks, to
+indicate who the command should be applied to, and they are also used as
+parameters to some of the functions in the \verb/game/ interface, to
+warp or prize some set of players at once.
+
+In a command function, targets can be used by accessing their fields
+directly, or by using the \verb/TargetToSet/ function in the
+\verb/playerdata/ interface to convert the target into a simple list of
+players.
+
+Targets can be constructed simply by declaring one on the stack and
+initializing its fields. They can also be dynamically allocated,
+although this isn't often necessary.
+
+Targets come in several types, some of which use additional data
+(besides the type itself) to specify the set. The data is kept in a
+C union, since targets can only be of one type at once.
+
+The most trivial target is of type \verb/T_NONE/ and means the empty set
+of players. A single-player target is of type \verb/T_PLAYER/ and the
+\verb/p/ field of the data union points to that player. An arena target
+(\verb/T_ARENA/) indicates all players in the given arena. A freq target
+(\verb/T_FREQ/) means all the players on a given team in a given arena.
+Another simple target, \verb/T_ZONE/, means everyone logged into the
+server. Finally, an arbitrary set of players can be specified using the
+\verb/T_LIST/ type, which uses the \verb/list/ field of the data union.
+
+This is the definition of the target struct:
+
+\begin{verbatim}
+typedef struct {
+    enum {
+        T_NONE,
+        T_PLAYER,
+        T_ARENA,
+        T_FREQ,
+        T_ZONE,
+        T_LIST
+    } type;
+    union {
+        Player *p;
+        Arena *arena;
+        struct { Arena *arena; int freq; } freq;
+        LinkedList list;
+    } u;
+} Target;
+\end{verbatim}
+
+
+\section{Memory management}
+
+Memory management in \asss{} is relatively simple. Many sorts of memory
+in the server, such as the global list of players and arenas, are
+managed by core modules. Others, such as the links of the linked list
+library, are handled by the utility library, and a module only has to
+use the linked list functions.
+
+Sometimes, though, a module will need to allocate memory to store
+private data in. There are three types of memory a module will want to
+allocate: some amount of space to store data for each player, space to
+store data for each arena, and arbitrary chunks of memory for whatever
+use. Each type will require a different way of allocating memory.
+
+\subsection{Per-player data}
+
+A module can call the \verb/AllocatePlayerData/ function in
+\verb/playerdata/ with a number of bytes to reserve that amount of space
+for each player. The value returned is a key, which can later be used to
+access that memory, given a player pointer. (Valid keys are positive
+integers. If the return value is negative, the allocation failed.)
+Modules that have used \verb/AllocatePlayerData/ must call
+\verb/FreePlayerData/ when they don't need the space anymore (typically
+during unloading).
+
+To access the data, a macro has been provided: \verb/PPDATA(player, key)/
+which will return a pointer to the start of the per-player space
+specified by the key, for the given player.
+
+
+\subsection{Per-arena data}
+
+This is just like per-player data, except you will use the functions
+\verb/AllocateArenaData/ and \verb/FreeArenaData/ in \verb/arenaman/,
+and the macro \verb/P_ARENA_DATA(arena, key)/ to access the data for a
+given arena.
+
+
+\subsection{Everything else}
+
+To allocate arbitrary chunks of memory, use the functions \verb/amalloc/
+and \verb/afree/, which work just like standard \verb/malloc/ and
+\verb/free/, except that \verb/amalloc/ will never return \verb/NULL/
+(it will halt the server with a memory error instead), and \verb/afree/
+can safely be used on null pointers.
+
+Also try to be aware of instances where data can be allocated on the
+stack, which will generally be more efficient than dynamic allocation.
+If the size of the data isn't known in advance, the system's
+\verb/alloca/ function can be used. If you need to pass a single-element
+linked list to a function, one can be constructed on the stack by
+cheating a little bit with the list abstraction, although you might want
+to use the lists normally to improve the clarity of your code.
+
+
+\subsection{Typical usage}
+
+Sometimes a module needs to store a large amount of data for each
+player, but it's for a specific game type that's only running in a few
+arenas, and it will only apply to a small number of the players in the
+zone. Allocating a large amount of data with \verb/AllocatePlayerData/
+will waste space in that situation, since that reserves space for every
+player, not just the ones that need it. There are two possible solutions
+here. One is to just do it anyway, and waste a bit of memory. The other
+is to allocate only room for a pointer in the per-player data, and have
+the pointer be null for players who don't need the data, and point to
+valid data (allocated with \verb/amalloc/ when the player enters an
+arena) for players who do need it. Which solution to use depends on
+several factors, such as how many bytes are being allocated, and what
+proportion of players are expected to need the data.
+
+In general, if the data is more than 20-24 bytes in length and a
+significant proportion of players are expected not to need the data, you
+should consider using a per-player pointer and manually allocating the
+bulk of the data.
+
+
+\subsection{Internals}
+
+Per-player and per-arena data work by allocating a big chunk of space
+for each player and arena, which is divided up among modules to store
+the data. This data can either sit right at the end of the struct, or be
+a separate block pointed to by the player or arena struct. Using a
+separate block means the server can adjust the size dynamically, but
+there's slightly more overhead when accessing the data. Using an
+in-struct block requires that the size of the block be set at server
+startup and not changed later. Currently, arenas always use an in-struct
+block, and players can be configured at compile time which method to
+use. The default is a separate block.
+
+As an example, let's say \verb/playerdata/ allocates 4096 bytes of extra
+space along with each player struct. It might provide bytes 128-192 of
+that space to one module to use for its private data, and then bytes
+192-204 to another module. The offset of the range from the start of the
+extra data array is the key returned to client modules, and the macro
+simply adds that offset to the start of the array.
+
+This solution is simple and efficient. One disadvantage is that using
+in-struct blocks may waste space, and can prevent modules from being
+loaded because there's not enough space left. Using separate dynamic
+blocks avoids that disadvantage, at the cost of a tiny bit of overhead.
+
+Another significant disadvantage is a lack of any semblance of
+type-safely. This can lead to hard-to-debug crashes caused by modules
+writing over each other's data. There's nothing to do here except to be
+aware of the situation and watch carefully for writing outside the
+bounds of your reserved space.
+
+
+\section{Threading}
+
+\asss{} is a multithreaded program, and will generally have several
+threads of execution doing important things at the same time. You don't
+need to know all the threads and their functions to write a module, but
+you do have to be aware of concurrency issues in shared data.
+
+The most important shared data are the global lists of players and
+arenas. The player list, managed by \verb/playerdata/, is protected by a
+read-write lock, and you must acquire it before iterating through the
+list (the same lock protects a few other items, like player status
+values). The arena list is also protected with a read-write lock,
+managed by \verb/arenaman/.
+
+FIXME: write more here
+
+
+\subsection{How to use threads in a module}
+
+First, consider well whether you really need a separate thread. Possible
+good reasons to use threads in your module are: it \emph{greatly}
+simplifies the implementation of some aspect of the module, or the
+module makes unavoidable calls that can potentially block for a very
+long time.
+
+How long a call needs to block before you should consider using threads
+depends on the path on which that call is made. If it only blocks for a
+long time during module load, like \verb/gethostbyname/ in the
+\verb/directory/ module, then there's no need for a thread. If it's
+something that happens relatively often, like writing to a file during
+on every position packet, as in the \verb/record/ module, a thread is
+probably called for.
+
+If you've decided that you need threads, you can simply go ahead and use
+any of the pthreads library to create and synchronize your threads. A
+simple synchronized queue for message passing between threads is part of
+the utility library, and may be useful for modules that deal with
+threads.
+
+
+\subsection{Internals}
+
+The main thread in \asss{} runs in the main loop module, and is used for
+running timer events. The \verb/net/ module has three threads of its
+own, one for receiving packets from the network and processing
+unreliable packets, one for processing reliable packets, and one for
+sending packets. The logging module has one thread that runs log
+handlers. The \verb/persist/ module uses one thread to do its database
+work, and \verb/mysql/ uses a thread to communicate with the mysql
+database server. The \verb/record/ module uses one thread (dynamically
+created) for each arena that is either recording or playing back a saved
+game.
+
+
+\section{Persistent data}
+
+The persistent data interface is one of the most confusing parts of
+\asss{}, but the concept behind it is relatively simple, so it shouldn't
+be hard to use it after a little thought.
+
+The service provided by the \verb/persist/ module is persistence of
+per-player, per-arena, and global data. Some examples of things that
+might use it are player scores, arena statistics (e.g., kills by ship
+type), a private staff message board, player inventory (in a RPG-type
+game), and a shutup timeout.
+
+Data stored by \verb/persist/ is opaque binary data. Serialization of
+the actual data that the module wants to store into a byte stream is the
+responsibility of the client module. Keeping that data around between
+invocations of the server and sessions of the player is the
+responsibility of \verb/persist/.
+
+To use \verb/persist/ a client module must provide some information,
+along with three functions that \verb/persist/ will call to manipulate
+the module's data.
+
+The first choice is whether the persistent data is to be stored
+per-player or per-arena. Note that really global data (one copy for the
+whole server) counts as per-arena data.
+
+The second choice is the scope of the data. There are two choices for
+scope: either there is a single copy of the data for all arenas, or
+there's a separate copy for each arena. The single copy model is
+specified by \verb/PERSIST_ALLARENAS/, and the one copy model by
+\verb/PERSIST_GLOBAL/. Note that either option can be specified for both
+per-player and per-arena data. Per-player global data means there's one
+copy of the data for each player (e.g., an inventory in an RPG spanning
+multiple arenas). Per-player all-arena data means there's one copy for
+each (player, arena) pair (e.g., regular scores). Per-arena global data
+is simply global data; there is only one copy. Per-arena all-arena data
+means there's one copy for each arena (e.g., base win statistics).
+
+Note that you don't have to actually store data for each entity. If you
+want some per-arena data stored only for a few arenas, simply return an
+empty piece of memory when queried for the data for an arena to which it
+doesn't apply.
+
+The third choice is the interval that the data should be stored for.
+This basically indicates when the data gets reset. There are several
+intervals defined in the server: ``forever,'' which as its name implies,
+never gets reset; ``per-reset,'' which is supposed to be something like
+a score reset (around two weeks); ``per-game,'' which is reset at the
+end of each flag or ball game (or at the staff's discretion); and
+``per-map-rotation,'' which is reset when the map changes.\footnote{This
+currently doesn't happen automatically when the map changes.}
+
+Historical data for intervals before the current one is saved in the
+database also, and can be queried by the appropriate tools (see the User
+Guide section on querying the database).
+
+Finally, you must provide a unique key that will differentiate your data
+from data stored by other modules. A key is just a 32-bit integer.
+
+After all that information, you'll need to write three functions (no
+matter whether your data is per-player or arena and what its scope is).
+
+The \verb/GetData/ function (you can name it whatever you want, that's
+just the name of the pointer in the struct you provide to
+\verb/persist/) is used to query your module for data to be written to
+the database. It's called when a player leaves an arena or disconnects
+from the server, or when an arena is being unloaded, to save the data
+from that entity before it's gone, and it's also called periodically
+every few minutes, to make sure the data on disk is relatively recent,
+in case of a server crash.
+
+When \verb/GetData/ is called, the client module should serialize its
+data into the buffer passed into the function, and then return the
+length of the serialized data. Returning zero indicates that it has no
+data to store for this entity.
+
+The \verb/SetData/ function is called when a player logs in or enters an
+arena, or when an arena is created. When called, the client module
+should deserialize data from the provided buffer into whatever form it
+will use it in.
+
+\verb/ClearData/ is called before \verb/SetData/ and can be used to
+clean up memory from the previous version of the data. When called, the
+client module should set the relevant data to starting values, as if a
+player or arena with no previously recorded data is being created.
+\verb/ClearData/ will also be called when an interval ends (immediately
+after a \verb/GetData/ call to get the last version of the data), to
+clear all data for the new interval.
+
+
+Finally, you pack up all that information and pointers to your functions
+in a statically allocated and initialized struct (of type
+\verb/PlayerPersistentData/ or \verb/ArenaPersistentData/), and call
+\verb/persist->RegPlayerPD/ or \verb/persist->RegArenaPD/. The
+\verb/persist/ module will be calling your getters and setters from its
+own thread, so you should use whatever locking is necessary to ensure
+correctness.
+
+
+\section{The Python interface}
+
+\asss{} supports modules written in Python. The Python support was
+designed to make writing modules very simple and natural, and to look
+similar to the C interface, so knowledge can be transferred easily.
+
+
+\subsection{Using Python modules}
+
+The support for Python modules is implemented as a loadable module
+itself, so in order to use any Python modules, you'll need to make sure
+it's loaded. It's called \verb/pymod/ and is located in \verb/pymod.so/
+(or \verb/.dll/), so you'll probably to put \verb/pymod:pymod/ in your
+modules.conf, near the end.
+
+Then, you can load Python modules using a module specifier like
+\verb/<py>foo/. This will attempt to load \verb/foo.py/ from the
+server's \verb/bin/ directory. You'll notice a \verb/foo.pyc/ that
+appears in that directory. That's the compiled bytecode for the module.
+It gets created automatically by the Python runtime to speed up future
+loads of the module.
+
+
+\subsection{Writing Python modules}
+
+\subsubsection{Example}
+
+I'm going to start with an example, because hopefully keeping it in mind
+will make the rest of the section more understandable. This is a stupid
+example, but it illustrates a few of the basic features of Python
+modules.
+
+\begin{verbatim}
+import asss
+
+chat = asss.get_interface(asss.I_CHAT)
+
+def myplayeraction(p, action, arena):
+    if action == asss.PA_CONNECT:
+        p.my_words = []
+
+paref = asss.reg_callback(asss.CB_PLAYERACTION, myplayeraction)
+
+def c_testcmd(cmd, params, p, target):
+    """Test command documentation."""
+    p.my_words.extend(params.split())
+    p.my_words = p.my_words[-5]
+    chat.SendMessage(p, "The last 5 words you typed are: %s" %
+        ', '.join(p.my_words))
+
+testcmdref = asss.add_command('testcmd', c_testcmd)
+\end{verbatim}
+
+
+\subsubsection{Initialization and deinitialization}
+
+Unlike C modules, there's no specific entry point for a Python module.
+When it's loaded, all the code in the file is executed as part of the
+import operation. Most of the code will just be function definitions
+that won't actually \emph{do} anything, but there will also have to be
+some code to register callbacks, commands, or anything else your module
+needs to do its job.
+
+The example has three things at the top level that just make definitions
+(the import statement and the two functions), and three lines that
+actually do stuff when it gets imported (the setting of \verb/chat/, the
+callback registering, and the command adding.
+
+All modules will need to import the module named \verb/asss/ in order to
+talk to the rest of the server. That contains several core functions
+that you'll need to use, as well as all the constants that the server
+knows about, as well as useful type objects. It's you to you whether to
+\verb/import asss/ and prefix all your uses of things from the module
+with \verb/asss./, or to do \verb/from asss import */, to get all those
+names in your namespace.
+
+Since there's no specific entry point, we need some way of undoing the
+stuff that gets done at module load time. Python supports automatic
+memory management, so we don't have to worry about freeing memory, but
+we do have to worry about stuff that got registered with other parts of
+the server. If you were looking carefully, you may have noticed that we
+saved the return values of \verb/reg_callback/ and \verb/add_command/ in
+variables that are never referenced. Those values are actually special
+handles that let us take care of unregistering cleanly: When the handle
+object is freed, the thing it was keeping track of is unregistered. When
+the module is unloaded, all of its variables and data are freed, and
+that automatically takes care of unregistering stuff that was
+registered.
+
+This trick saves Python module writers from some extra work, but it has
+a few caveats: First, it's easy to just write
+\verb/asss.add_command('blah', c_blah)/ and forget to save the return
+value. This will run fine, but the command will be unregistered
+immediately after it's registered, and it won't work. Second, it's
+relatively easy to break this system and prevent things from being
+unregistered when they shouldn't be (e.g., by stashing a handle value in
+another module's dictionary). If you do things like this, you'll get
+unpredictable behavior, and it's your own fault.
+
+Attaching and detaching modules to arenas were also handled through the
+single entry point, and so are done differently in Python: To receive
+attach/detach notification, you should define functions in your module
+named \verb/mm_attach/ and \verb/mm_detach/. They will be called with
+one parameter, an arena.
+
+
+\subsubsection{Interfaces and callbacks}
+
+In C, interfaces and callbacks were managed with the functions in the
+\verb/Imodman/ interface. In Python, various considerations made it
+convenient to put the corresponding functions in the \verb/asss/ module.
+
+You can get a reference to an interface with \verb/asss.get_interface/.
+This takes two parameters, an interface id, and an arena, but the arena
+is optional (it defaults to globally registered interfaces). It returns
+an interface reference or raises an exception if it fails. It's
+analagous to \verb/mm->GetInterface/. To call functions in an interface,
+just use the dot operator and regular function call syntax.
+
+You can register a callback function with \verb/asss.reg_callback/. This
+takes three parameters, the callback id, a function, and an arena, and
+again the arena is optional (defaults to all arenas). It returns a
+handle to the registered callback that you have to hold on to until you
+want to unregister the callback. That usually means storing it in a
+global variable of your module. This function is analagous to
+\verb/mm->RegCallback/.
+
+You can register an interface implemented in python with
+\verb/asss.reg_interface/. Only a few interfaces currently support
+implementations in Python: \verb/Iarenaplace/, \verb/Ifreqman/,
+\verb/points_koth/, and \verb/periodicpoints/. \verb/reg_interface/
+takes three parameters: the interface id, a tuple of functions that
+implement the interface, and an optional arena. This returns a handle
+that you should keep as long as you want the interface registered.
+
+You can call a set of callbacks using \verb/asss.call_callback/. This
+also takes three parameters, the callback id, a tuple that is the
+arguments you want the callback to be called with, and an optional
+arena.
+
+
+\subsubsection{Type and argument conversion}
+
+For the most part, types are automatically translated between C and
+Python code without you having to do anything. If you find an instances
+where things aren't working as you expect, please let me know.
+
+One potentially confusing point is the treatment of the C type
+\verb/Target/. Rather than wrapping targets in a new Python object like
+players and arenas, targets are represented in the most convenient
+representation for the type of target. That is: targets with type
+\verb/T_PLAYER/ are simply player objects, \verb/T_ARENA/ targets are
+just arena objects, \verb/T_NONE/ targets are \verb/None/, \verb/T_FREQ/
+ones are a tuple of (arena, freq), and \verb/T_ZONE/ targets are the
+string \verb/"zone"/. \verb/T_LIST/ targets aren't currently supported.
+
+This makes it very easy to use functions that accept \verb/Target/s,
+like \verb/game->WarpTo/, because you can just pass a plain player
+object.
+
+Some C functions ``return'' values by modifying values through pointers
+passed in as arguments. We'll call those ``out arguments.'' Other C
+functions accept input through pointers, and also return output through
+them. Those are ``in/out arguments.'' Functions with either of these two
+types of arguments will have a different calling convention when being
+used from Python! Out arguments do not appear in the argument list when
+calling functions, but in/out arguments (and of course regular ``in''
+arguments do). Out and in/out arguments are treated as extra return
+values: The return value of a function is determined by taking all of
+its return values, starting with the real return value (unless the
+function returns void), followed by any out or in/out arguments, in
+left-to-right order, and puting them all in a tuple. If there is only
+one return value, it won't be wrapped in a tuple. One convenient special
+case of this rule is functions with no out or in/out arguments: the
+regular return value of the function is translated to Python and
+returned, with no wrapping. Another example, a function that returns an
+arena and has two integer out arguments (\verb/Iarenaplace->Place/),
+when called from Python, will return a tuple of three values: an arena
+followed by two integers.
+
+There are a few more complicated cases of argument conversion involving
+format strings and fixed-length buffers, which are not yet described
+here, but are easy enough to figure out with a peek at the source.
+FIXME: describe these better.
+
+
+\subsubsection{Memory management}
+
+Memory management in Python is mostly taken care of for you. Just
+remember not to stick references to things in places where they won't
+get cleaned up.
+
+Per-arena and per-player data is handled more intuitively than in C. The
+Python objects that represent players and arenas support having
+arbitrary attributes (fields) added to them. So if you'd like to
+associate a list with each player, you can do what the example does and
+just write \verb/p.my_words = []/. Just like in C, you'll probably want
+to initialize your per-player data in a \verb/CB_PLAYERACTION/ callback
+so that it will be there later when your module looks for it.
+
+One large caveat: the namespace of player object attributes is shared
+among all loaded modules. That is, if you load two different modules
+that both try to access \verb/p.foo/ of the same player, they'll get the
+same thing. In limited cases, this could be considered a feature, but in
+general you should try to avoid name collisions by prefixing the
+attributes that your module uses with the name of the module, or an
+abbreviation of it.
+
+
+\subsubsection{Timers}
+
+As with interface and callback functions, this is now in the \verb/asss/
+module, but it works similarly to \verb/mainloop->SetTimer/: call
+\verb/asss.set_timer/ with a function and a interval in ticks. If you
+specify the optional third parameter, that becomes the interval, and the
+second becomes the initial delay. \verb/set_timer/ will return a handle
+for the timer, that you should keep until you want to cancel the timer.
+
+The timer function will be called with no arguments (you can use nested
+scopes or default arguments to pass data to it), and as in C, it can
+return a true value to continue being called, or false to cancel itself.
+As a special case, if the function doesn't return anything (which in
+Python means it returns \verb/None/), it will be called again.
+
+
+\subsubsection{Commands}
+
+This is also in the \verb/asss/ module: Use
+\verb/asss.add_command('blah', c_blah, arena)/ to add a command, and
+save the returned handle until you want the command unregistered. The
+arena parameter is optional. The docstring of the command function will
+be used as the command's helptext.
+
+
+\subsubsection{Player and arena lists}
+
+Rather than exposing the actual list of all exising players or arenas,
+Python modules have to get at the list indirectly: Two functions are
+provided, \verb/asss.for_each_player/, and \verb/asss.for_each_arena/,
+that take a single function, and invoke that function on each player (or
+arena) in turn. The function can access extra data, if necessary,
+through nested scopes or default parameters.
+
+
+\subsubsection{Persistent data}
+
+This is similar to, but somewhat easier than, the C persistent data
+support. Registering is similar to C: call
+\texttt{asss.reg\_player\_persistent(key, interval, scope, getter,
+setter, clearer)}, or \verb/reg_arena_persistent/, where key is an
+integer, interval and scope have the same options as in C, and the last
+three parameters are functions to handle the data.
+
+The three functions are much easier than their counterparts in C,
+though: rather than dealing with binary data, serialization is handled
+for you using Python's pickle module. So you can save most Python
+objects directly as persistent data. The getter is passed one argument,
+the player or arena, and should return data to be stored, or \verb/None/
+to store no data and delete any previous data. The setter is passed two
+arguments, the player/arena, and the data that was previously stored.
+Its return value is ignored. The clearer is passed one argument, the
+player/arena to be cleared, and its return value is also ignored.
+
+
+
+\section{Misc. internals}
+
+\subsection{The player state machine}
+
+FIXME
+
+\subsection{The arena state machine}
+
+FIXME
+
+\subsection{Module loaders}
+
+FIXME
+
+
+\section{Reference}
+
+\subsection{Source code files}
+
+FIXME
+
+\subsection{Interfaces}
+
+FIXME
+
+\subsection{Callbacks}
+
+FIXME
+
+\subsection{The utility library}
+
+FIXME
+
+
+
+
+\section{Tutorials}
+
+\subsection{\texttt{log\_console}}
+
+FIXME
+
+\subsection{\texttt{logman}}
+
+FIXME
+
+\subsection{\texttt{fm\_password}}
+
+FIXME
+
+
+
+\end{document}
+
+% vim: et
+

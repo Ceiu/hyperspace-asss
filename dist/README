@@ -1,0 +1,58 @@
+
+Hi. This is a development release of asss ("a small subspace server").
+If you have any questions or comments, mail them to grelminar@yahoo.com.
+The official home page of asss is http://asss.yi.org/.
+The forum at http://forums.minegoboom.com/ (not run by me) is also a
+helpful resource.
+
+Most of the documentation is available in the user guide, in directory
+"doc". You might want to read it before you try playing with this.
+
+To start using this thing, make sure you're in the root directory of
+this distribution (the directory that this file is in), and run
+"bin/asss". You might want to run it in a screen session so it can be
+detached easily. Or you can run "bin/asss -d" to make it fork into the
+background.
+
+You can close it with the sysop command ?shutdown, or just with a
+Ctrl-C.
+
+Note the presence of several empty directories: log, data, and tmp.
+Don't remove any of them, the server needs them to be there to create
+files in.
+
+
+If you want to connect to a billing server, you can either use the
+'billing_ssc' module or the 'billing' module with the proxy. The proxy
+requires a relatively recent (2.1+) version of Python. The billing_ssc
+module is somewhat better tested than the alternative.
+
+
+Known bugs:
+
+See http://asss.yi.org/bugs/
+
+
+Contributors:
+
+These are people who have contribued stuff to the actual code. Many
+others have provided support in other forms, and they are thanked in the
+user guide.
+
+Grelminar <grelminar@yahoo.com> - primary author
+Mine GO BOOM <?> - objects, watchdamage, other stuff
+divine.216 <?> - banners
+GiGaKiLLeR <gigamon@hotmail.com> - the turf scoring modules
+Stag Shot <ffl2000vv@yahoo.com> - soccer scoring, game timers
+PriitK <?> - continuum support, ssc biller support
+Catid <?> - many security fixes, mark, file administration, objects
+Smong <?> - many many bug fixes, misc. documentation
+Snrrrub <snrrrub@yahoo.com> - misc. fixes and other stuff
+Dr Brain <?> - various contributions
+The Junky <the_junky@extreme-games.net> - alias db enhancements
+Niadh - obscene implementation
+numpf - various contributions
+Arnk Dylie <?> - various contributions
+D1st0rt <?> - various contributions
+Jowie <?> - patches for bugs
+
