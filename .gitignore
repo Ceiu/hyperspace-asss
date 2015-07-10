@@ -1,0 +1,10 @@
+bin
+build
+conf
+data
+maps
+tmp
+src/system.mk
+scrty
+scrty1
+.tags*
