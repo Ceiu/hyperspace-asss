@@ -65,6 +65,16 @@ static int cfg_exp_per_quickkill = 0;
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
+static void ResetStreakData(Player *player) {
+  PlayerStreakData *pdata = PPDATA(player, pdkey);
+
+  pdata->kill_streak = 0;
+  pdata->streak_start = 0;
+  pdata->streak_level = 0;
+  pdata->last_kill = 0;
+  pdata->quick_kill_count = 1;
+}
+
 static int GetStreakLevel(int kills)
 {
   return kills / cfg_kills_per_level;
@@ -117,7 +127,7 @@ static void AnnounceQuickKill(Player *player, int kills)
       break;
 
     default:
-      if (kills <= 0)
+      if (kills <= 1)
         break;
 
     case 5:
@@ -173,7 +183,7 @@ static void AnnounceQuickKillWithReward(Player *player, int kills, int money, in
       break;
 
     default:
-      if (kills <= 0)
+      if (kills <= 1)
         break;
 
     case 5:
@@ -186,12 +196,9 @@ static void AnnounceQuickKillWithReward(Player *player, int kills, int money, in
 
 static void OnPlayerAction(Player *player, int action, Arena *arena)
 {
-  PlayerStreakData *pdata = PPDATA(player, pdkey);
-
   switch (action) {
     case PA_ENTERARENA:
-      pdata->kill_streak = 0;
-      pdata->streak_start = 0;
+      ResetStreakData(player);
       break;
 
     case PA_LEAVEARENA:
@@ -266,7 +273,7 @@ static void OnPlayerDeath(Arena *arena, Player *killer, Player *killed, int boun
           AnnounceQuickKill(killer, kdata->quick_kill_count);
         }
       } else {
-        kdata->quick_kill_count = 0;
+        kdata->quick_kill_count = 1;
       }
     }
 
@@ -283,33 +290,17 @@ static void OnPlayerDeath(Arena *arena, Player *killer, Player *killed, int boun
 
   // We probably don't need to do this with the spawn handler, but it prevents post-mortem kill
   // bonuses.
-  ddata->kill_streak = 0;
-  ddata->streak_start = 0;
-  ddata->streak_level = 0;
-  ddata->last_kill = 0;
-  ddata->quick_kill_count = 0;
+  ResetStreakData(killed);
 }
 
 static void OnPlayerSpawn(Player *player, int reason)
 {
-  PlayerStreakData *pdata = PPDATA(player, pdkey);
-
-  pdata->kill_streak = 0;
-  pdata->streak_start = 0;
-  pdata->streak_level = 0;
-  pdata->last_kill = 0;
-  pdata->quick_kill_count = 0;
+  ResetStreakData(player);
 }
 
 static void OnPlayerFreqShipChange(Player *player, int newship, int oldship, int newfreq, int oldfreq)
 {
-  PlayerStreakData *pdata = PPDATA(player, pdkey);
-
-  pdata->kill_streak = 0;
-  pdata->streak_start = 0;
-  pdata->streak_level = 0;
-  pdata->last_kill = 0;
-  pdata->quick_kill_count = 0;
+  ResetStreakData(player);
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
