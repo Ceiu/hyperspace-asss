@@ -47,10 +47,10 @@ static AssignmentNode * create_assignment(char *left, ASTNode *right);
 /*%type <func_decl> function_decl*/
 
 %pure_parser
-%parse-param {ParseObject *parse_object}
+%parse-param {struct ParseObject *parse_object}
 %parse-param {yyscan_t *scanner}
 %lex-param {yyscan_t *scanner}
-%lex-param {ParseObject *parse_object}
+%lex-param {struct ParseObject *parse_object}
 
 %nonassoc '='
 %right '?'
@@ -145,7 +145,7 @@ expr:
 
 %%
 
-void yyerror(ParseObject *parse_object, yyscan_t scanner, char *s)
+void yyerror(struct ParseObject *parse_object, yyscan_t scanner, char *s)
 {
 	/* keep the original error message, if one's occured */
 	if (parse_object->error == 0)
@@ -164,7 +164,7 @@ struct Formula * parse_formula(const char *string, char *error_buffer, int error
 	yyscan_t scanner;
 
 	/* setup parse_object */
-	ParseObject parse_object;
+	struct ParseObject parse_object;
 	parse_object.assign_list = NULL;
 	parse_object.func_decl = NULL;
 	parse_object.error = 0;
