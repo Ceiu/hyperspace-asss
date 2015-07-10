@@ -373,7 +373,7 @@ local void buyItem(Player *p, Item *item, int count, int ship)
 
 local void sellItem(Player *p, Item *item, int count, int ship)
 {
-	if (!(item->sellPrice == 0 && item->buyPrice != 0))
+	if (item->sellPrice)
 	{
 		if (database->getMoney(p) >= -item->sellPrice * count)
 		{
@@ -945,7 +945,7 @@ local void sellCommand(const char *command, const char *params, Player *p, const
 
 local void shipAddedCallback(Player *p, int ship, int shipset)
 {
-	/* cfghelp: All:InitItem, arena, string, mod: hscore_buysell
+	/* cfghelp: All:InitItems, arena, string, mod: hscore_buysell
 	 * Comma seperated list of items to add when the ship is bought.
 	 * There should be no spaces between the commas ('item1,item2,...').*/
 	const char *initItem = cfg->GetStr(p->arena->cfg, shipNames[ship], "InitItems");

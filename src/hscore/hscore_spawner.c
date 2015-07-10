@@ -35,6 +35,7 @@ typedef struct PlayerDataStruct
 	short dirty;
 	short spawned;
 	short usingPerShip[8];
+	short reship_after_settings;
 	int currentShip;
 	ticks_t lastDeath;
 
@@ -175,6 +176,7 @@ local GlobalOverrideKeys globalOverrideKeys;
 //local void respawn(Player *p);
 
 //prototypel
+local void resendOverrides(Player *p);
 local int doOverrideAdvisers(Player *p, int ship, int shipset, const char *prop, int init_value);
 local int resetBountyTimerCallback(void *clos);
 
@@ -700,10 +702,24 @@ local void Pppk(Player *p, byte *p2, int len)
 */
 local void PlayerSettingsReceived(Player *p, int success, void *clos)
 {
+	PlayerDataStruct *pdata = (PlayerDataStruct*)clos;
+
 	if (success) {
-		lm->LogP(L_INFO, "hscore_spawner", p, "Player settings received!");
+		if (pdata->reship_after_settings) {
+			lm->LogP(L_INFO, "hscore_spawner", p, "Player settings received, reshipping");
+
+	        Target t;
+	        //Ihscorespawner *spawner;
+	        t.type = T_PLAYER;
+	        t.u.p = p;
+
+			game->ShipReset(&t);
+		} else {
+			lm->LogP(L_INFO, "hscore_spawner", p, "Player settings received.");
+		}
 	} else {
-		lm->LogP(L_INFO, "hscore_spawner", p, "Player settings rejected. Try again.");
+		lm->LogP(L_ERROR, "hscore_spawner", p, "Player settings rejected. Resending overrides and reshipping player");
+		resendOverrides(p);
 	}
 
 }
@@ -746,7 +762,8 @@ local void shipsLoadedCallback(Player *p)
 	addOverrides(p, database->getPlayerShipSet(p));
 	database->unlock();
 	//send the packet the first time
-	clientset->SendClientSettingsWithCallback(p, PlayerSettingsReceived, NULL);
+	data->reship_after_settings = 1;
+	clientset->SendClientSettingsWithCallback(p, PlayerSettingsReceived, data);
 
 	data->dirty = 0;
 	data->currentShip = p->p_ship;
@@ -759,8 +776,26 @@ local void shipsetChangedCallback(Player *p, int oldshipset, int newshipset)
 	database->lock();
 	addOverrides(p, newshipset);
 	database->unlock();
+
 	//send the packet the first time
-	clientset->SendClientSettingsWithCallback(p, PlayerSettingsReceived, NULL);
+	data->reship_after_settings = 1;
+	clientset->SendClientSettingsWithCallback(p, PlayerSettingsReceived, data);
+
+	data->dirty = 0;
+	data->spawned = 0;
+	data->lastDeath = 0;
+	data->currentShip = p->p_ship;
+}
+
+local void OnShipAdded(Player *p, int ship, int shipset) {
+	PlayerDataStruct *data = PPDATA(p, playerDataKey);
+
+	database->lock();
+	addOverrides(p, shipset);
+	database->unlock();
+	//send the packet the first time
+	data->reship_after_settings = 1;
+	clientset->SendClientSettingsWithCallback(p, PlayerSettingsReceived, data);
 
 	data->dirty = 0;
 	data->spawned = 0;
@@ -776,7 +811,8 @@ local void itemCountChangedCallback(Player *p, ShipHull *hull, Item *item, Inven
   if (p && database->getPlayerCurrentHull(p) == hull && item->resendSets) {
 		data->dirty = 0;
 		addOverrides(p, database->getPlayerShipSet(p));
-		clientset->SendClientSettingsWithCallback(p, PlayerSettingsReceived, NULL);
+		data->reship_after_settings = 0;
+		clientset->SendClientSettingsWithCallback(p, PlayerSettingsReceived, data);
   } else {
 		//check if it changed anything in clientset, and if it did, recompute and flag dirty
 		if (item->affectsSets) {
@@ -799,7 +835,8 @@ local void killCallback(Arena *arena, Player *killer, Player *killed, int bounty
 		database->lock();
 		addOverrides(killed, database->getPlayerShipSet(killed));
 		database->unlock();
-		clientset->SendClientSettingsWithCallback(killed, PlayerSettingsReceived, NULL);
+		data->reship_after_settings = 0;
+		clientset->SendClientSettingsWithCallback(killed, PlayerSettingsReceived, data);
 	}
 }
 
@@ -825,7 +862,8 @@ local void shipFreqChangeCallback(Player *p, int newship, int oldship, int newfr
 			database->lock();
 			addOverrides(p, database->getPlayerShipSet(p));
 			database->unlock();
-			clientset->SendClientSettingsWithCallback(p, PlayerSettingsReceived, NULL);
+			data->reship_after_settings = 1;
+			clientset->SendClientSettingsWithCallback(p, PlayerSettingsReceived, data);
 		}
 
 		if (newship != SHIP_SPEC)
@@ -838,7 +876,8 @@ local void shipFreqChangeCallback(Player *p, int newship, int oldship, int newfr
 		if (data->dirty == 1)
 		{
 			data->dirty = 0;
-			clientset->SendClientSettingsWithCallback(p, PlayerSettingsReceived, NULL);
+			data->reship_after_settings = 1;
+			clientset->SendClientSettingsWithCallback(p, PlayerSettingsReceived, data);
 		}
 	}
 }
@@ -859,7 +898,8 @@ local void flagWinCallback(Arena *arena, int freq, int *points)
 			if (data->dirty == 1)
 			{
 				data->dirty = 0;
-				clientset->SendClientSettingsWithCallback(p, PlayerSettingsReceived, NULL);
+				data->reship_after_settings = 1;
+				clientset->SendClientSettingsWithCallback(p, PlayerSettingsReceived, data);
 			}
 		}
 	}
@@ -1071,7 +1111,8 @@ local void ammoAddedCallback(Player *p, ShipHull *hull, Item *ammoUser) //warnin
 	{
 		pdata->dirty = 0;
 		addOverrides(p, database->getPlayerShipSet(p));
-		clientset->SendClientSettingsWithCallback(p, PlayerSettingsReceived, NULL);
+		pdata->reship_after_settings = 0;
+		clientset->SendClientSettingsWithCallback(p, PlayerSettingsReceived, data);
 	}
 	else //check if it changed anything in clientset, and if it did, recompute and flag dirty
 	{
@@ -1101,7 +1142,8 @@ local void ammoRemovedCallback(Player *p, ShipHull *hull, Item *ammoUser) //warn
 	{
 		pdata->dirty = 0;
 		addOverrides(p, database->getPlayerShipSet(p));
-		clientset->SendClientSettingsWithCallback(p, PlayerSettingsReceived, NULL);
+		pdata->reship_after_settings = 0;
+		clientset->SendClientSettingsWithCallback(p, PlayerSettingsReceived, data);
 	}
 	else //check if it changed anything in clientset, and if it did, recompute and flag dirty
 	{
@@ -1160,10 +1202,13 @@ local void respawn(Player *p)
 
 local void resendOverrides(Player *p)
 {
+	PlayerDataStruct *data = PPDATA(p, playerDataKey);
+
 	database->lock();
 	addOverrides(p, database->getPlayerShipSet(p));
 
-	clientset->SendClientSettingsWithCallback(p, PlayerSettingsReceived, NULL);
+	data->reship_after_settings = 1;
+	clientset->SendClientSettingsWithCallback(p, PlayerSettingsReceived, data);
 	database->unlock();
 }
 
@@ -1201,6 +1246,7 @@ local void ignorePrize(Player *p, int prize)
 local void HSItemReloadCallback(void)
 {
 	Player *p;
+	PlayerDataStruct *data;
 	Link *link;
 	pd->Lock();
 	FOR_EACH_PLAYER(p)
@@ -1208,7 +1254,10 @@ local void HSItemReloadCallback(void)
 		database->lock();
 		addOverrides(p, database->getPlayerShipSet(p));
 		database->unlock();
-		clientset->SendClientSettingsWithCallback(p, PlayerSettingsReceived, NULL);
+
+		data = PPDATA(p, playerDataKey);
+		data->reship_after_settings = 0;
+		clientset->SendClientSettingsWithCallback(p, PlayerSettingsReceived, data);
 	}
 	pd->Unlock();
 }
@@ -1301,6 +1350,7 @@ EXPORT int MM_hscore_spawner(int action, Imodman *_mm, Arena *arena)
 		mm->RegCallback(CB_SPAWN, playerSpawnCallback, arena);
 		mm->RegCallback(CB_WARZONEWIN, flagWinCallback, arena);
 		mm->RegCallback(CB_SHIPS_LOADED, shipsLoadedCallback, arena);
+		mm->RegCallback(CB_SHIP_ADDED, OnShipAdded, arena);
 		mm->RegCallback(CB_SHIPSET_CHANGED, shipsetChangedCallback, arena);
 		mm->RegCallback(CB_SHIPFREQCHANGE, shipFreqChangeCallback, arena);
 		mm->RegCallback(CB_PLAYERACTION, playerActionCallback, arena);
@@ -1326,6 +1376,7 @@ EXPORT int MM_hscore_spawner(int action, Imodman *_mm, Arena *arena)
 		mm->UnregCallback(CB_PLAYERACTION, playerActionCallback, arena);
 		mm->UnregCallback(CB_SHIPFREQCHANGE, shipFreqChangeCallback, arena);
 		mm->UnregCallback(CB_SHIPSET_CHANGED, shipsetChangedCallback, arena);
+		mm->UnregCallback(CB_SHIP_ADDED, OnShipAdded, arena);
 		mm->UnregCallback(CB_SHIPS_LOADED, shipsLoadedCallback, arena);
 		mm->UnregCallback(CB_WARZONEWIN, flagWinCallback, arena);
 

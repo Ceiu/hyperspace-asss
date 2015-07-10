@@ -31,15 +31,24 @@ local int CanChangeToShip(Player *p, int new_ship, int is_changing, char *err_bu
         shipset = database->getPlayerShipSet(p);
       }
 
-      if (database->getPlayerHull(p, new_ship, shipset)) {
-        printf("Hull exists for ship %d on shipset %d.\n", new_ship, shipset);
-      }
+      int ship_cost = cfg->GetInt(p->arena->cfg, cfg->SHIP_NAMES[new_ship], "BuyPrice", 0);
+      int ship_exp = cfg->GetInt(p->arena->cfg, cfg->SHIP_NAMES[new_ship], "ExpRequired", 0);
+      ShipHull *hull = database->getPlayerHull(p, new_ship, shipset);
 
-      if (!cfg->GetInt(p->arena->cfg, cfg->SHIP_NAMES[new_ship], "BuyPrice", 0)) {
-        printf("Ship %d appears to be free. Cost: %d\n", new_ship, cfg->GetInt(p->arena->cfg, cfg->SHIP_NAMES[new_ship], "BuyPrice", 0));
-      }
+      if (!hull && !ship_cost) {
+        // The ship is free, but the player hasn't used it before. We need to initialize it here.
+        // Probably safe to assume we need to delay the player here as well or they may crash out if they don't have good settings...
 
-      if (database->getPlayerHull(p, new_ship, shipset) || !cfg->GetInt(p->arena->cfg, cfg->SHIP_NAMES[new_ship], "BuyPrice", 0)) {
+        if (ship_exp < 1 || database->getExp(p) >= ship_exp) {
+          lm->LogP(L_DRIVEL, "hscore_enforcer", p, "Player joining the game in an unowned, free ship. Granting ship to player and assigning them to one later.");
+          database->addShipToShipSet(p, new_ship, shipset);
+
+          allowed = 1;
+        } else {
+          if (err_buf)
+            snprintf(err_buf, buf_len, "You do not have enough experience to use the %s.", cfg->SHIP_NAMES[new_ship]);
+        }
+      } else if (hull || !ship_cost) {
         lm->LogP(L_DRIVEL, "hscore_enforcer", p, "Player owns ship %s.", cfg->SHIP_NAMES[new_ship]);
         allowed = 1;
       } else {

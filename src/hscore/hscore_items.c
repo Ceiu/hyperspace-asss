@@ -1056,7 +1056,7 @@ local int addItemToHull(Player *p, Item *item, ShipHull *hull, int amount)
 		}
 	}
 
-  DO_CBS(CB_ITEMS_CHANGED, p->arena, ItemsChangedFunction, (p, hull));
+	DO_CBS(CB_ITEMS_CHANGED, p->arena, ItemsChangedFunction, (p, hull));
 
 	if (doInit)
 	{

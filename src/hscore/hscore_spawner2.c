@@ -1674,6 +1674,8 @@ static void OnShipSetCommand(const char *command, const char *params, Player *pl
 {
   PlayerSpawnData *pdata;
 
+  // TODO: Add a time limiter on this so players can't abuse it
+
   database->lock();
 
   if (target->type == T_PLAYER) {
