@@ -506,8 +506,11 @@ local void sellItem(Player *p, Item *item, int count, int ship)
 
 local void buyShip(Player *p, int ship)
 {
-    //////////////////////////////////////////////////
-    // TEMP STUFFS
+	// Prevent people from buying/selling ships in combat to force reshipping
+    if (p->p_ship != SHIP_SPEC && !(p->position.status & STATUS_SAFEZONE)) {
+    	chat->SendMessage(p, "Ships may only be purchased from a safe zone or spectator mode.");
+    	return;
+    }
 
     // Ignore extremely fast requests...
     BuySellData *objData = PPDATA(p, bsDataKey);
@@ -518,10 +521,6 @@ local void buyShip(Player *p, int ship)
     } else {
         objData->lastCommand = current_ticks();
     }
-
-    // TEMP STUFFS
-    //////////////////////////////////////////////////
-
 
 	int buyPrice = cfg->GetInt(p->arena->cfg, shipNames[ship], "BuyPrice", 0);
 	int expRequired = cfg->GetInt(p->arena->cfg, shipNames[ship], "ExpRequired", 0);
@@ -582,9 +581,11 @@ local void buyShip(Player *p, int ship)
 
 local void sellShip(Player *p, int ship)
 {
-    //////////////////////////////////////////////////
-    // TEMP STUFFS
-
+	// Prevent people from buying/selling ships in combat to force reshipping
+    if (p->p_ship != SHIP_SPEC && !(p->position.status & STATUS_SAFEZONE)) {
+    	chat->SendMessage(p, "Ships may only be sold from a safe zone or spectator mode.");
+    	return;
+    }
     // Ignore extremely fast requests...
     BuySellData *objData = PPDATA(p, bsDataKey);
     if(current_ticks() - objData->lastCommand < MIN_COMMAND_DELAY)
@@ -594,10 +595,6 @@ local void sellShip(Player *p, int ship)
     } else {
         objData->lastCommand = current_ticks();
     }
-
-    // TEMP STUFFS
-    //////////////////////////////////////////////////
-
 
 	int sellPrice = cfg->GetInt(p->arena->cfg, shipNames[ship], "SellPrice", 0);
 
