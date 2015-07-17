@@ -10,6 +10,7 @@
 import asss
 
 chat = asss.get_interface(asss.I_CHAT)
+config = asss.get_interface(asss.I_CONFIG)
 game = asss.get_interface(asss.I_GAME)
 stats = asss.get_interface(asss.I_STATS)
 lm = asss.get_interface(asss.I_LOGMAN)
@@ -137,10 +138,13 @@ class HS_Duel:
 def dbcb_noop(status, res):
     pass
 
-def load_id(p):
-    (ok, name) = sql.EscapeString(p.name)
-    if ok == 1:
-        query = "SELECT id FROM hs_players WHERE name = '%s'" %  name
+def load_id(p, arena):
+    arena_id = config.GetStr(arena.cfg, "Hyperspace", "ArenaIdentifier") or "default"
+
+    (ok1, name) = sql.EscapeString(p.name)
+    (ok2, arena_id) = sql.EscapeString(arena_id)
+    if ok1 == 1 and ok2 == 1:
+        query = "SELECT id FROM hs_players WHERE name = '%s' and arena='%s'" % (name, arena_id)
         sql.Query(lambda status, res : dbcb_id(status, res, p), 0, query)
     else:
         lm.LogP(asss.L_ERROR, "hs_duel", p, "Error escaping id query")
@@ -269,7 +273,7 @@ def player_kill(a, killer, killed, bty, flags, pts, green):
 def player_action(p, action, arena):
     if action == asss.PA_ENTERARENA:
         p.hs_duel_t = None
-        load_id(p)
+        load_id(p, arena)
     else:
         ad = arena.hs_duel
         if ad.active and p in ad.ready:
