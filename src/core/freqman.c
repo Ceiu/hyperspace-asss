@@ -478,6 +478,8 @@ int find_entry_freq(Arena *arena, Player *p, int is_changing, char *err_buf, int
 	Freq *freq;
 	int freqMetric;
 
+
+
 	for (i = 0; i < max; ++i)
 	{
 		if (!enforcers_can_change_to_freq(arena, p, i, is_changing, err_buf, buf_len))
@@ -1027,36 +1029,38 @@ int freq_not_full(Arena *arena, int freqnum, char *err_buf, int buf_len)
 
 	max = max_freq_size(arena, freqnum);
 
-	if (max <= 0)
-	{
-		result = FALSE;
-		if (err_buf)
-			snprintf(err_buf, buf_len, "Frequency %d is not available.", freqnum);
-	}
-	else
-	{
-		int count = 0;
-		Player *p;
-		Link *link;
-		pd->Lock();
-		FOR_EACH_PLAYER_IN_ARENA(p, arena)
-		{
-			if (p->p_freq == freqnum
-				&& IS_HUMAN(p)
-				&& p->status == S_PLAYING
-				&& (p->p_ship != SHIP_SPEC || ad->cfg_spectatorsCountForTeamSize)
-			)
-			{
-				++count;
-			}
-		}
-		pd->Unlock();
-
-		if (count >= max)
+	if (max >= 0) {
+		if (max == 0)
 		{
 			result = FALSE;
 			if (err_buf)
-				snprintf(err_buf, buf_len, "Frequency %d is full.", freqnum);
+				snprintf(err_buf, buf_len, "Frequency %d is not available.", freqnum);
+		}
+		else
+		{
+			int count = 0;
+			Player *p;
+			Link *link;
+			pd->Lock();
+			FOR_EACH_PLAYER_IN_ARENA(p, arena)
+			{
+				if (p->p_freq == freqnum
+					&& IS_HUMAN(p)
+					&& p->status == S_PLAYING
+					&& (p->p_ship != SHIP_SPEC || ad->cfg_spectatorsCountForTeamSize)
+				)
+				{
+					++count;
+				}
+			}
+			pd->Unlock();
+
+			if (count >= max)
+			{
+				result = FALSE;
+				if (err_buf)
+					snprintf(err_buf, buf_len, "Frequency %d is full.", freqnum);
+			}
 		}
 	}
 
@@ -1246,7 +1250,7 @@ void update_config(Arena *arena)
 		ad->cfg_requiredTeams = 0;
 
 	/* cfghelp: Team:PrivFreqStart, arena, int, range: 0-9999, def: 100
-	 * Freqs above this value are considered private freqs. */
+	 * Freqs equal to and above this value are considered private freqs. */
 	ad->cfg_firstPrivateFreq = cfg->GetInt(ch, "Team", "PrivFreqStart", 100);
 	if (ad->cfg_firstPrivateFreq < 0 || ad->cfg_firstPrivateFreq > 9999)
 		ad->cfg_firstPrivateFreq = 100;
@@ -1278,13 +1282,13 @@ void update_config(Arena *arena)
 	ad->cfg_maxPlaying = cfg->GetInt(ch, "General", "MaxPlaying", 100);
 
 	/* cfghelp: Team:MaxPerTeam, arena, int, def: 0
-	 * The maximum number of players on a public freq. Zero means no
-	 * limit. */
+	 * The maximum number of players on a public freq. Set to -1 for no limit; 0 to disable public
+	 * frequencies. */
 	ad->cfg_maxPublicFreqSize = cfg->GetInt(ch, "Team", "MaxPerTeam", 0);
 
 	/* cfghelp: Team:MaxPerPrivateTeam, arena, int, def: 0
-	 * The maximum number of players on a private freq. Zero means
-	 * no limit. */
+	 * The maximum number of players on a private freq. Set to -1 for no limit; 0 to disable private
+	 * frequencies. */
 	ad->cfg_maxPrivateFreqSize = cfg->GetInt(ch, "Team", "MaxPerPrivateTeam", 0);
 
 	/* cfghelp: Team:IncludeSpectators, arena, bool, def: 0
