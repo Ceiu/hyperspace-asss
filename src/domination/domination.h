@@ -16,7 +16,10 @@ typedef enum {
   DOM_GAME_STATE_ACTIVE,
 
   /* A game is active, but currently paused. */
-  DOM_GAME_STATE_PAUSED
+  DOM_GAME_STATE_PAUSED,
+
+  /* The current game has just finished and modules are processing the end-of-game event */
+  DOM_GAME_STATE_FINISHED
 } DomGameState;
 
 /**
@@ -30,7 +33,7 @@ typedef enum {
   DOM_REGION_STATE_CAPTURING,
 
   /* Region is contested, but all contesting teams have an equal amount of influence */
-  DOM_REGION_STATE_STALLED,
+  DOM_REGION_STATE_CONTESTED,
 
   /* Region is fully controlled by a single team */
   DOM_REGION_STATE_CONTROLLED
@@ -49,9 +52,6 @@ typedef enum {
 
   /* Flag has been touched and the team is capturing the flag */
   DOM_FLAG_STATE_CAPTURING,
-
-  /* Flag has been touched again during a capture, no progress is made toward the capture */
-  DOM_FLAG_STATE_STALLED,
 
   /* Flag has been captured and is now controlled by a team */
   DOM_FLAG_STATE_CONTROLLED,

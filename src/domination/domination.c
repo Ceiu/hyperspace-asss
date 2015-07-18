@@ -48,7 +48,11 @@
 #define DOM_MAX(x, y) ((x) > (y) ? (x) : (y))
 #define DOM_CLAMP(val, min, max) HSC_MIN(HSC_MAX((val), (min)), (max))
 
+#define DOM_NEUTRAL_FREQ -1
+
 struct DomArena {
+  Arena *arena;
+
   HashTable teams;
   short teams_loaded;
 
@@ -75,11 +79,15 @@ struct DomArena {
 };
 
 struct DomTeam {
+  Arena *arena;
+
   u_int32_t cfg_team_freq;
   const char *team_name;
 };
 
 struct DomRegion {
+  Arena *arena;
+
   DomRegionState state;
   Region *region;
   const char *region_name;
@@ -98,17 +106,20 @@ struct DomRegion {
 };
 
 struct DomFlag {
-  DomFlagState state;
+  Arena *arena;
   int flag_id;
+
+  DomFlagState state;
 
   HashTable regions;
   short regions_loaded;
 
-  /* Amount of influence provided by this flag */
-  u_int32_t cfg_flag_value;
+  /* Amount of requisition provided by this flag */
+  u_int32_t cfg_flag_requisition;
 
+  /* Controlling freq and their current influence */
   int controller_freq;
-  u_int32_t controller_influence;
+  u_int32_t influence;
 
   /* The freq that controls the physical flag; used for state management */
   int flag_freq;
@@ -129,6 +140,7 @@ static Ichat *chat;
 static Iflag *flagcore;
 static Ilogman *lm;
 static Imainloop *mainloop;
+static Imapdata *mapdata;
 static Iplayerdata *pd;
 
 // Global resource identifiers
@@ -202,18 +214,98 @@ static void ReadArenaConfig(Arena *arena) {
   adata->cfg_defense_reward_radius = cfg->getInt(arena->cfg, "Domination", "DefenseEventRadius", 500);
 }
 
-static DomFlag* getDomFlag(int flag_id) {
+////////////////////////////////////////////////////////////////////////////////////////////////////
 
-
+static DomFlag* GetDomFlag(int flag_id) {
 
 }
 
+static DomTeam* GetDomTeam(int freq) {
 
+}
+
+static DomRegion* GetDomRegion(const char *region) {
+
+}
+
+static int GetFlagProvidedRequisition(DomFlag *flag) {
+
+}
+
+static int GetFlagRequiredInfluence(DomFlag *flag) {
+  // This is a constant at the moment
+  return 100;
+}
+
+static int GetFlagAcquiredInfluence(DomFlag *flag, DomTeam *team) {
+  UpdateFlagAcquiredInfluence(flag);
+
+  return flag->controlling_freq == team->freq ? flag->influence : 0;
+}
+
+static DomTeam* GetFlagControllingTeam(DomFlag *flag) {
+
+}
+
+static void SetFlagState(DomFlag *flag, DomFlagState state, DomTeam *team, int influence) {
+  UpdateFlagAcquiredInfluence(flag);
+}
+
+static int GetRegionRequisition(DomRegion *region, DomTeam *team) {
+
+}
+
+static int GetRegionProvidedControlPoints(DomRegion *region) {
+
+}
+
+static int GetRegionRequiredInfluence(DomRegion *flag) {
+
+}
+
+static int GetRegionAcquiredInfluence(DomRegion *region, DomTeam *team) {
+  UpdateRegionAcquiredInfluence(region);
+}
+
+static DomTeam* getRegionControllingTeam(DomRegion *region) {
+
+}
+
+static void SetRegionState(DomRegion *region, DomRegionState state, DomTeam *team, int influence) {
+  UpdateRegionAcquiredInfluence(region);
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
+static void UpdateFlagAcquiredInfluence(DomFlag *flag) {
+
+}
+
+static void UpdateRegionAcquiredInfluence(DomRegion *region) {
+
+}
+
+static void ClearFlagTimers(DomFlag *flag) {
+  mainloop->ClearTimer(OnFlagContestTimer, dflag);
+  mainloop->ClearTimer(OnFlagCaptureTimer, dflag);
+}
+
+static void ClearRegionTimers(DomRegion *region) {
+
+}
+
+static void ClearGameTimers(Arena *arena) {
+
+}
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
 static void OnArenaAttach(Arena *arena) {
   // Initialize arena data
+
+
+
+
 
 }
 
@@ -237,83 +329,169 @@ static void OnFlagGameInit(Arena *arena) {
   flagcore->SetCarryMode(arena, CARRY_NONE);
 }
 
+
+
+
+
+
 static void OnFlagTouch(Arena *arena, Player *player, int flag_id) {
-  // Make sure the flag is one that actually matters
-  // Start timer to move flag to the contested state
-  // Send flag state changed event
-  DomArena *adata = (DomArena*) arena_data;
+  DomArena *adata = P_ARENA_DATA(arena, adkey);
   DomFlag *dflag = getDomFlag(flag_id);
   DomTeam *dteam = getDomTeam(player->freq);
   FlagInfo info;
 
-  // Iterate through all regions and update their state
-  switch (arena_data->game_state) {
-    case DOM_GAME_STATE_INACTIVE:
-    case DOM_GAME_STATE_STARTING:
-      // Nope. Reset flag state to unowned.
-      dflag = NULL;
+  if (dflag) {
+    if (dteam && arena_data->game_state == DOM_GAME_STATE_ACTIVE) {
+      // A player is contesting a flag
+      dflag->flag_freq = player->freq;
 
-    case DOM_GAME_STATE_PAUSED:
-      // Still no; reset flag to last known state.
-      info = (FlagInfo) { FI_ONMAP, NULL, -1, -1, dflag ? dflag->flag_freq : -1 };
+      ClearFlagTimers(dflag);
+      SetFlagState(dflag, DOM_FLAG_STATE_CONTESTED, dflag->controlling_freq, dflag->controlling_req);
+      mainloop->SetTimer(OnFlagContestTimer, adata->cfg_flag_contest_time * 100, 0, dflag, dflag);
+    } else {
+      // Touched by someone outside of the domination game or the game is not active. Restore the
+      // flag state.
+      info = (FlagInfo) { FI_ONMAP, NULL, -1, -1, dflag->flag_freq };
       flagcore->SetFlags(arena, flag_id, &info, 1);
-      break;
-
-    case DOM_GAME_STATE_ACTIVE:
-      // Yes! Start timer and update flag and region states
-      if (dteam && dflag) {
-        DomFlagState prev_state = dflag->state;
-        dflag->state = DOM_FLAG_CONTESTED;
-
-        dflag->freq = player->freq;
-
-        mainloop->ClearTimer(OnFlagTouchTimer, dflag);
-        mainloop->SetTimer(OnFlagTouchTimer, adata->cfg_flag_contest_time * 100, 0, dflag);
-
-        DB_CBS(CB_DOM_FLAG_STATE_CHANGE, arena, DomFlagStateChangeFunc, (arena, dflag, prev_state, dflag->state));
-      }
-
-      break;
+    }
+  } else {
+    // We don't care about this flag
   }
-
-
-
 }
 
-static void OnFlagTouchTimer(void *param) {
+static void OnFlagContestTimer(void *param) {
+  DomFlag *dflag = (DomFlag*) param;
+  DomArena *adata = P_ARENA_DATA(dflag->arena, adkey);
 
+  ClearFlagTimers(dflag);
+  int req_influence = GetFlagRequiredInfluence(dflag);
+
+  if (dflag->flag_freq != dflag->controlling_freq || dflag->influence < req_influence) {
+    // Flag has not yet been controlled. Give it to the new team
+    if (dflag->controlling_freq == DOM_NEUTRAL_FREQ) {
+      dflag->controlling_freq = dflag->flag_freq;
+      dflag->influence = 0;
+    }
+
+    SetFlagState(dflag, DOM_FLAG_STATE_CAPTURING, dflag->controlling_freq, dflag->influence);
+
+    // Determine amount of time remaining until capture
+    float pct_time = dflag->influence ? ((float) dflag->influence / (float) req_influence) : 1.0;
+
+    if (dflag->flag_freq == dflag->controlling_freq) {
+      pct_time = 1 - pct_time;
+    }
+
+    mainloop->SetTimer(OnFlagCaptureTimer, 100 * ((float) adata->cfg_flag_capture_time * pct_time), 0, dflag, dflag);
+  } else {
+    // Sanity assignment
+    dflag->influence = req_influence;
+
+    SetFlagState(dflag, DOM_FLAG_STATE_CONTROLLED, dflag->controlling_freq, req_influence);
+  }
 }
+
+static void OnFlagCaptureTimer(void *param) {
+  DomFlag *dflag = (DomFlag*) param;
+  DomArena *adata = P_ARENA_DATA(dflag->arena, adkey);
+
+  ClearFlagTimers(dflag);
+  int req_influence = GetFlagRequiredInfluence(dflag);
+
+  if (dflag->flag_freq != dflag->controlling_freq) {
+    // Flag has been "flipped" to a new freq
+    dflag->controlling_freq = dflag->flag_freq;
+    dflag->influence = 0;
+
+    mainloop->SetTimer(OnFlagCaptureTimer, 100 * ((float) adata->cfg_flag_capture_time * pct_time), 0, dflag, dflag);
+  } else {
+    // Flag has been fully controlled
+    dflag->influence = req_influence;
+    SetFlagState(dflag, DOM_FLAG_STATE_CONTROLLED, dflag->controlling_freq, req_influence);
+  }
+}
+
+static void OnFlagStateChange(DomFlag *dflag, DomFlagState state, DomTeam *team, int influence) {
+  chat->SendArenaMessage(dflag->arena, "Flag state change! Flag ID: %d, state: %d, team: %d, influence: %d", dflag->flag_id, state, team->freq, influence);
+
+  // for each region:
+  //  for each flag in region:
+  //    if flag state == CONTROLLED
+  //      add flag's influence value to team's total region influence
+
+  // determine team with the most influence (iteam)
+  // if iteam's influence == 0
+  //  set region state to NEUTRAL
+  // elseif multiple teams are tied for most influence:
+  //  set region state to CONTESTED
+  // elseif region's controlling team != iteam or controlling team's
+  // total requisition is lower than the required req for the region:
+  //  set region capture timer
+  //  set region state to CAPTURING
+  // else
+  //  set region state to CONTROLLED
+}
+
+static void OnRegionInfluenceTickTimer(void *param) {
+  // Update influence for all regions
+
+  // For each region:
+  //  For each team:
+  //    team influence += max(team req - sum of enemy req, 0)
+  //
+  //
+}
+
+static void OnRegionStateChange(DomRegion *region, DomRegionState state, DomTeam *team, int influence) {
+  // If region state == controlled and team controls all other regions:
+  //  set domination timer
+  // else
+  //  clear domination timer
+}
+
+
+
+
+
+
+
+
 
 static void OnFlagCleanup(Arena *arena, int flag_id, int reason, Player *carrier, int freq) {
-
+  chat->SendArenaMessage(arena, "Flag cleanup! Flag: %d, reason: %d, Freq: %d Player: %s", flag_id, reason, freq, carrier->name);
 }
 
 static void OnFlagReset(Arena *arena, int freq, int points) {
   // This should only happen on ?flagreset; in which case we should probably reset the game and
   // announce to the arena which jerk moderator reset the game.
+
+  chat->SendArenaMessage(arena, "Flag game reset. We don't like this at all.");
 }
 
 
 
 
-static void OnRegionTick(void *arena_data) {
 
-}
 
 
 static void OnGameStateChange(Arena *arena, DomGameState old_state, DomGameState new_state) {
-
-}
-
-static void OnRegionStateChange(Arena *arena, DomRegion *region, DomRegionState old_state, DomRegionState new_state) {
-
-}
-
-static void OnFlagStateChange(Arena *arena, DomFlag *flag, DomFlagState old_state, DomFlagState new_state) {
-
+  // Not sure what to do here quite yet
 }
 
 
+
+
+
+
+static void OnDominationTimer(void *param) {
+  // Dominating team wins
+  // Set game state to FINISHED
+}
+
+static void OnGameEndTimer(void *param) {
+  // Game ended via time
+  // Set game state to FINISHED
+}
 
 
 
