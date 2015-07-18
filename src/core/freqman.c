@@ -546,6 +546,8 @@ int find_entry_freq(Arena *arena, Player *p, int is_changing, char *err_buf, int
 			strcpy(err_buf, "");
 	}
 
+	mm->ReleaseInterface(balancer);
+
 	return result;
 }
 
