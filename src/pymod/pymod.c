@@ -10,6 +10,7 @@
 
 /* another nasty hack */
 #undef _XOPEN_SOURCE
+#undef _DEBUG
 #include "Python.h"
 #include "structmember.h"
 
@@ -17,7 +18,7 @@
 #if PY_VERSION_HEX < 0x02050000
 #include <unistd.h>
 typedef ssize_t         Py_ssize_t;
-#endif 
+#endif
 
 #include "asss.h"
 
@@ -68,10 +69,10 @@ typedef struct ArenaObject
 	PyObject *dict;
 } ArenaObject;
 
-typedef struct PlayerListObject
+/*typedef struct PlayerListObject
 {
 //blank?
-} PlayerListObject;
+} PlayerListObject;*/
 
 local PyTypeObject PlayerType;
 local PyTypeObject ArenaType;
@@ -107,6 +108,47 @@ local PyObject *log_code;
 pthread_mutex_t pymtx;
 #define LOCK() pthread_mutex_lock(&pymtx)
 #define UNLOCK() pthread_mutex_unlock(&pymtx)
+
+// Python threading
+local pthread_t main_thread; // the thread that initialized python
+local long long gil_main_lock_count = 0;
+local PyThreadState *gil_main_threadstate = NULL;
+#define NEEDS_GIL PyGILState_STATE gstate; int gil_main_lock
+// ALL Python API calls must be within this lock
+// (Recursive calls are okay)
+// Locking order: GI_LOCK first, after that LOCK() or aman/pd->Lock()
+#define GI_LOCK() do { \
+	if (pthread_equal(main_thread, pthread_self())) \
+	{ \
+		++gil_main_lock_count; \
+		if (gil_main_lock_count == 1) \
+		{ \
+			PyEval_RestoreThread(gil_main_threadstate); \
+			gil_main_threadstate = NULL; \
+		} \
+		gil_main_lock = 1; \
+	} \
+	else \
+	{ \
+		gstate = PyGILState_Ensure(); \
+		gil_main_lock = 0; \
+	} \
+} while (0)
+
+#define GI_UNLOCK() do { \
+	if (gil_main_lock) \
+	{ \
+		--gil_main_lock_count; \
+		if (gil_main_lock_count == 0) \
+		{ \
+			gil_main_threadstate = PyEval_SaveThread(); \
+		} \
+	} \
+	else \
+	{ \
+		PyGILState_Release(gstate); \
+	} \
+} while (0)
 
 /* utility functions */
 
@@ -242,15 +284,60 @@ local int cvt_p2c_player(PyObject *o, Player **pp)
 	else if (o->ob_type == &PlayerType)
 	{
 		*pp = ((PlayerObject*)o)->p;
+		if (!*pp)
+		{
+			PyErr_SetString(PyExc_ValueError, "stale player object (cvt_p2c_player)");
+			return FALSE;
+		}
 		return TRUE;
 	}
 	else
 	{
-		PyErr_SetString(PyExc_TypeError, "arg isn't a player object");
+		PyErr_SetString(PyExc_TypeError, "arg isn't a player object (cvt_p2c_player)");
 		return FALSE;
 	}
 }
 
+local PyObject * cvt_c2p_player_not_none(Player *p)
+{
+	PyObject *o;
+	if (p)
+	{
+		o = (PyObject*)((pdata*)PPDATA(p, pdkey))->obj;
+	}
+	else
+	{
+		o = Py_None;
+		lm->Log(L_ERROR, "<pymod> NULL player was passed to python however this parameter was defined as player_not_none");
+	}
+	Py_XINCREF(o);
+	return o;
+}
+
+local int cvt_p2c_player_not_none(PyObject *o, Player **pp)
+{
+	if (o == Py_None)
+	{
+		*pp = NULL;
+		PyErr_SetString(PyExc_ValueError, "player object must not be None (cvt_p2c_player_not_none)");
+		return FALSE;
+	}
+	else if (o->ob_type == &PlayerType)
+	{
+		*pp = ((PlayerObject*)o)->p;
+		if (!*pp)
+		{
+			PyErr_SetString(PyExc_ValueError, "stale player object (cvt_p2c_player_not_none)");
+			return FALSE;
+		}
+		return TRUE;
+	}
+	else
+	{
+		PyErr_SetString(PyExc_TypeError, "arg isn't a player object (cvt_p2c_player_not_none)");
+		return FALSE;
+	}
+}
 
 local PyObject * cvt_c2p_arena(Arena *a)
 {
@@ -273,11 +360,57 @@ local int cvt_p2c_arena(PyObject *o, Arena **ap)
 	else if (o->ob_type == &ArenaType)
 	{
 		*ap = ((ArenaObject*)o)->a;
+		if (!*ap)
+		{
+			PyErr_SetString(PyExc_ValueError, "stale arena object (cvt_p2c_arena)");
+			return FALSE;
+		}
 		return TRUE;
 	}
 	else
 	{
-		PyErr_SetString(PyExc_TypeError, "arg isn't a arena object");
+		PyErr_SetString(PyExc_TypeError, "arg isn't a arena object (cvt_p2c_arena)");
+		return FALSE;
+	}
+}
+
+local PyObject * cvt_c2p_arena_not_none(Arena *a)
+{
+	PyObject *o;
+	if (a)
+	{
+		o = (PyObject*)((adata*)P_ARENA_DATA(a, adkey))->obj;
+	}
+	else
+	{
+		o = Py_None;
+		lm->Log(L_ERROR, "<pymod> NULL arena was passed to python however this parameter was defined as arena_not_none");
+	}
+	Py_XINCREF(o);
+	return o;
+}
+
+local int cvt_p2c_arena_not_none(PyObject *o, Arena **ap)
+{
+	if (o == Py_None)
+	{
+		*ap = NULL;
+		PyErr_SetString(PyExc_ValueError, "arena object must not be None (cvt_p2c_arena_not_none)");
+		return FALSE;
+	}
+	else if (o->ob_type == &ArenaType)
+	{
+		*ap = ((ArenaObject*)o)->a;
+		if (!*ap)
+		{
+			PyErr_SetString(PyExc_ValueError, "stale arena object (cvt_p2c_arena_not_none)");
+			return FALSE;
+		}
+		return TRUE;
+	}
+	else
+	{
+		PyErr_SetString(PyExc_TypeError, "arg isn't a arena object (cvt_p2c_arena_not_none)");
 		return FALSE;
 	}
 }
@@ -345,10 +478,13 @@ local int cvt_p2c_playerlist(PyObject *o, LinkedList **list)
 		{
 			PyObject *obj = PyList_GET_ITEM(o, i);
 			Player *p;
-			if(cvt_p2c_player(obj, &p) && p)
+			if(!cvt_p2c_player_not_none(obj, &p))
 			{
-				LLAdd(*list, p);
+				UNLOCK();
+				return FALSE;
 			}
+
+			LLAdd(*list, p);
 		}
 		UNLOCK();
 		return TRUE;
@@ -410,12 +546,22 @@ local int cvt_p2c_target(PyObject *o, Target *t)
 	{
 		t->type = T_PLAYER;
 		t->u.p = ((PlayerObject*)o)->p;
+		if (!t->u.p)
+		{
+			PyErr_SetString(PyExc_ValueError, "stale player object (cvt_p2c_target)");
+			return FALSE;
+		}
 		return TRUE;
 	}
 	else if (o->ob_type == &ArenaType)
 	{
 		t->type = T_ARENA;
 		t->u.arena = ((ArenaObject*)o)->a;
+		if (!t->u.arena)
+		{
+			PyErr_SetString(PyExc_ValueError, "stale arena object (cvt_p2c_target)");
+			return FALSE;
+		}
 		return TRUE;
 	}
 	else if (PyTuple_Check(o))
@@ -423,7 +569,7 @@ local int cvt_p2c_target(PyObject *o, Target *t)
 		t->type = T_FREQ;
 		t->u.arena = ((ArenaObject*)o)->a;
 		return PyArg_ParseTuple(o, "O&i",
-				cvt_p2c_arena,
+				cvt_p2c_arena_not_none,
 				&t->u.freq.arena,
 				&t->u.freq.freq);
 	}
@@ -722,6 +868,19 @@ local PyObject *Player_get_status(PyObject *obj, void *v)
 	return PyInt_FromLong(p->status);
 }
 
+local PyObject *Player_set_status(PyObject *obj, PyObject *value)
+{
+        GET_AND_CHECK_PLAYER(p)
+	int status = PyInt_AsLong(value);
+	pd->WriteLock();
+	p->status = status;
+	pd->WriteUnlock();
+
+	log_py_exception(L_ERROR, "Player_set_status exception");
+
+	return NULL;
+}
+
 local PyObject *Player_get_type(PyObject *obj, void *v)
 {
 	GET_AND_CHECK_PLAYER(p)
@@ -802,6 +961,19 @@ local PyObject *Player_get_ipaddr(PyObject *obj, void *v)
 	return PyString_FromString(p->ipaddr);
 }
 
+local PyObject *Player_set_ipaddr(PyObject *obj, PyObject *value)
+{
+        GET_AND_CHECK_PLAYER(p)
+        char *ipaddr  = PyString_AsString(value);
+        pd->WriteLock();
+        astrncpy(p->ipaddr, ipaddr, sizeof(p->ipaddr));
+        pd->WriteUnlock();
+
+        log_py_exception(L_ERROR, "Player_set_ipaddr exception");
+
+        return NULL;
+}
+
 local PyObject *Player_get_connectas(PyObject *obj, void *v)
 {
 	GET_AND_CHECK_PLAYER(p)
@@ -829,8 +1001,9 @@ local PyObject *Player_get_flagscarried(PyObject *obj, void *v)
 local PyGetSetDef Player_getseters[] =
 {
 #define SIMPLE_GETTER(n, doc) { #n, Player_get_ ## n, NULL, doc, NULL },
+#define SIMPLE_GETSET(n, doc) { #n, (getter)Player_get_ ## n, (setter)Player_set_ ## n, doc, NULL },
 	SIMPLE_GETTER(pid, "player id")
-	SIMPLE_GETTER(status, "current status")
+	SIMPLE_GETSET(status, "current status")
 	SIMPLE_GETTER(type, "client type (e.g., cont, 1.34, chat)")
 	SIMPLE_GETTER(arena, "current arena")
 	SIMPLE_GETTER(name, "player name")
@@ -841,14 +1014,17 @@ local PyGetSetDef Player_getseters[] =
 	SIMPLE_GETTER(onfor, "seconds since login")
 	SIMPLE_GETTER(position, "current position, returns tuple (x, y, v_x, v_y, rotation, bounty, status)")
 	SIMPLE_GETTER(macid, "machine id")
-	SIMPLE_GETTER(ipaddr, "client ip address")
+	SIMPLE_GETSET(ipaddr, "client ip address")
 	SIMPLE_GETTER(connectas, "which virtual server the client connected to")
 	SIMPLE_GETTER(authenticated, "whether the client has been authenticated")
 	SIMPLE_GETTER(flagscarried, "how many flags the player is carrying")
 #undef SIMPLE_GETTER
+#undef SIMPLE_GETSET
 	{NULL}
 };
 
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wmissing-field-initializers"
 local PyTypeObject PlayerType =
 {
 	PyObject_HEAD_INIT(NULL)
@@ -891,7 +1067,7 @@ local PyTypeObject PlayerType =
 	0,                         /* tp_alloc */
 	0,                         /* tp_new */
 };
-
+#pragma GCC diagnostic pop
 
 /* arenas */
 
@@ -965,6 +1141,8 @@ local PyGetSetDef Arena_getseters[] =
 	{NULL}
 };
 
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wmissing-field-initializers"
 local PyTypeObject ArenaType =
 {
 	PyObject_HEAD_INIT(NULL)
@@ -1007,6 +1185,7 @@ local PyTypeObject ArenaType =
 	0,                         /* tp_alloc */
 	0,                         /* tp_new */
 };
+#pragma GCC diagnostic pop
 
 /* player lists */
 
@@ -1039,15 +1218,17 @@ local PyMethodDef player_list_methods[] =
 		"Appends a player to the list"},
 	{"insert", mthd_playerlist_insert, METH_VARARGS,
 		"Inserts a player into to the list before an index"},
-	{NULL, NULL}
+	{NULL, NULL, 0, NULL}
 };
 
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wmissing-field-initializers"
 local PyTypeObject PlayerListType =
 {
 	PyObject_HEAD_INIT(NULL)
 	0,                         /*ob_size*/
 	"asss.PlayerList",         /*tp_name*/
-	sizeof(PlayerListObject),  /*tp_basicsize*/
+	0 /*sizeof(PlayerListObject)*/,  /*tp_basicsize*/
 	0,                         /*tp_itemsize*/
 	0,                         /*tp_dealloc*/
 	0,                         /*tp_print*/
@@ -1085,7 +1266,7 @@ local PyTypeObject PlayerListType =
 	0,                         /* tp_alloc */
 	0,                         /* tp_new */
 };
-
+#pragma GCC diagnostic pop
 
 
 /* associating asss objects with python objects */
@@ -1150,7 +1331,10 @@ local PyObject * call_gen_py_interface(const char *iid,
 
 local void py_newplayer(Player *p, int isnew)
 {
+	NEEDS_GIL;
 	pdata *d = PPDATA(p, pdkey);
+
+	GI_LOCK();
 	if (isnew)
 	{
 		d->obj = PyObject_New(PlayerObject, &PlayerType);
@@ -1168,7 +1352,7 @@ local void py_newplayer(Player *p, int isnew)
 	{
 		if (d->obj->ob_refcnt != 1)
 			lm->Log(L_ERROR, "<pymod> there are %lu remaining references to a player object!",
-					(unsigned long)d->obj->ob_refcnt);
+					(unsigned long)d->obj->ob_refcnt - 1);
 
 		/* this stuff would usually be done in dealloc, but I want to
 		 * make sure player objects for players who are gone are
@@ -1184,12 +1368,16 @@ local void py_newplayer(Player *p, int isnew)
 		Py_DECREF(d->obj);
 		d->obj = NULL;
 	}
+	GI_UNLOCK();
 }
 
 
 local void py_aaction(Arena *a, int action)
 {
+	NEEDS_GIL;
 	adata *d = P_ARENA_DATA(a, adkey);
+
+	GI_LOCK();
 
 	if (action == AA_PRECREATE)
 	{
@@ -1209,7 +1397,7 @@ local void py_aaction(Arena *a, int action)
 	{
 		if (d->obj->ob_refcnt != 1)
 			lm->Log(L_ERROR, "<pymod> there are %lu remaining references to an arena object!",
-					(unsigned long)d->obj->ob_refcnt);
+					(unsigned long)d->obj->ob_refcnt - 1);
 
 		/* see notes for py_newplayer as to why this is done here. */
 		d->obj->a = NULL;
@@ -1220,6 +1408,8 @@ local void py_aaction(Arena *a, int action)
 		Py_DECREF(d->obj);
 		d->obj = NULL;
 	}
+
+	GI_UNLOCK();
 }
 
 
@@ -1464,9 +1654,12 @@ local void deinit_py_commands(void)
 
 local void pycmd_command(const char *tc, const char *params, Player *p, const Target *t)
 {
+	NEEDS_GIL;
 	PyObject *args;
 	LinkedList cmds = LL_INITIALIZER;
 	Link *l;
+
+	GI_LOCK();
 
 	args = Py_BuildValue("ssO&O&",
 			tc,
@@ -1491,6 +1684,8 @@ local void pycmd_command(const char *tc, const char *params, Player *p, const Ta
 		}
 		Py_DECREF(args);
 	}
+
+	GI_UNLOCK();
 }
 
 struct pycmd_ticket
@@ -1554,19 +1749,24 @@ local PyObject *mthd_add_command(PyObject *self, PyObject *args)
 
 local int pytmr_timer(void *v)
 {
+	NEEDS_GIL;
 	PyObject *func = v, *ret;
 	int goagain;
+
+	GI_LOCK();
 
 	ret = PyObject_CallFunction(func, NULL);
 	if (!ret)
 	{
 		log_py_exception(L_ERROR, "error in python timer function");
+		GI_UNLOCK();
 		return FALSE;
 	}
 
 	goagain = ret == Py_None || PyObject_IsTrue(ret);
 	Py_DECREF(ret);
 
+	GI_UNLOCK();
 	return goagain;
 }
 
@@ -1596,7 +1796,7 @@ local PyObject *mthd_set_timer(PyObject *self, PyObject *args)
 	}
 
 	/* use an extra level of indirection for the key to ensure each
-	 * timer can be destroyed indivudually even if multiple ones refer
+	 * timer can be destroyed individually even if multiple ones refer
 	 * to the same python function. */
 	funcptr = amalloc(sizeof(PyObject*));
 	*funcptr = func;
@@ -1696,20 +1896,24 @@ struct pypersist_ppd
 
 local int get_player_data(Player *p, void *data, int len, void *v)
 {
+	NEEDS_GIL;
 	struct pypersist_ppd *pyppd = v;
 	PyObject *val, *pkl;
 	const void *pkldata;
 	Py_ssize_t pkllen;
 
+	GI_LOCK();
 	val = PyObject_CallMethod(pyppd->funcs, "get", "(O&)", cvt_c2p_player, p);
 	if (!val)
 	{
 		log_py_exception(L_ERROR, "error in persistent data getter");
+		GI_UNLOCK();
 		return 0;
 	}
 	else if (val == Py_None)
 	{
 		Py_DECREF(val);
+		GI_UNLOCK();
 		return 0;
 	}
 
@@ -1718,6 +1922,7 @@ local int get_player_data(Player *p, void *data, int len, void *v)
 	if (!pkl)
 	{
 		log_py_exception(L_ERROR, "error pickling persistent data");
+		GI_UNLOCK();
 		return 0;
 	}
 
@@ -1725,6 +1930,7 @@ local int get_player_data(Player *p, void *data, int len, void *v)
 	{
 		Py_DECREF(pkl);
 		lm->Log(L_ERROR, "<pymod> pickle result isn't buffer");
+		GI_UNLOCK();
 		return 0;
 	}
 
@@ -1734,6 +1940,7 @@ local int get_player_data(Player *p, void *data, int len, void *v)
 		lm->Log(L_WARN, "<pymod> persistent data getter returned more "
 				"than %lu bytes of data (%d allowed)",
 				(unsigned long)pkllen, len);
+		GI_UNLOCK();
 		return 0;
 	}
 
@@ -1741,13 +1948,17 @@ local int get_player_data(Player *p, void *data, int len, void *v)
 
 	Py_DECREF(pkl);
 
+	GI_UNLOCK();
 	return pkllen;
 }
 
 local void set_player_data(Player *p, void *data, int len, void *v)
 {
+	NEEDS_GIL;
 	struct pypersist_ppd *pyppd = v;
 	PyObject *buf, *val, *ret;
+
+	GI_LOCK();
 
 	buf = PyString_FromStringAndSize(data, len);
 	val = PyObject_CallMethod(cPickle, "loads", "(O)", buf);
@@ -1755,6 +1966,7 @@ local void set_player_data(Player *p, void *data, int len, void *v)
 	if (!val)
 	{
 		log_py_exception(L_ERROR, "can't unpickle persistent data");
+		GI_UNLOCK();
 		return;
 	}
 
@@ -1763,17 +1975,22 @@ local void set_player_data(Player *p, void *data, int len, void *v)
 	Py_XDECREF(ret);
 	if (!ret)
 		log_py_exception(L_ERROR, "error in persistent data setter");
+
+	GI_UNLOCK();
 }
 
 local void clear_player_data(Player *p, void *v)
 {
+	NEEDS_GIL;
 	struct pypersist_ppd *pyppd = v;
 	PyObject *ret;
 
+	GI_LOCK();
 	ret = PyObject_CallMethod(pyppd->funcs, "clear", "(O&)", cvt_c2p_player, p);
 	Py_XDECREF(ret);
 	if (!ret)
 		log_py_exception(L_ERROR, "error in persistent data clearer");
+	GI_UNLOCK();
 }
 
 
@@ -1823,20 +2040,25 @@ struct pypersist_apd
 
 local int get_arena_data(Arena *a, void *data, int len, void *v)
 {
+	NEEDS_GIL;
 	struct pypersist_apd *pyapd = v;
 	PyObject *val, *pkl;
 	const void *pkldata;
 	Py_ssize_t pkllen;
 
+	GI_LOCK();
+
 	val = PyObject_CallMethod(pyapd->funcs, "get", "(O&)", cvt_c2p_arena, a);
 	if (!val)
 	{
 		log_py_exception(L_ERROR, "error in persistent data getter");
+		GI_UNLOCK();
 		return 0;
 	}
 	else if (val == Py_None)
 	{
 		Py_DECREF(val);
+		GI_UNLOCK();
 		return 0;
 	}
 
@@ -1845,6 +2067,7 @@ local int get_arena_data(Arena *a, void *data, int len, void *v)
 	if (!pkl)
 	{
 		log_py_exception(L_ERROR, "error pickling persistent data");
+		GI_UNLOCK();
 		return 0;
 	}
 
@@ -1852,6 +2075,7 @@ local int get_arena_data(Arena *a, void *data, int len, void *v)
 	{
 		Py_DECREF(pkl);
 		lm->Log(L_ERROR, "<pymod> pickle result isn't buffer");
+		GI_UNLOCK();
 		return 0;
 	}
 
@@ -1861,6 +2085,7 @@ local int get_arena_data(Arena *a, void *data, int len, void *v)
 		lm->Log(L_WARN, "<pymod> persistent data getter returned more "
 				"than %lu bytes of data (%d allowed)",
 				(unsigned long)pkllen, len);
+		GI_UNLOCK();
 		return 0;
 	}
 
@@ -1868,20 +2093,24 @@ local int get_arena_data(Arena *a, void *data, int len, void *v)
 
 	Py_DECREF(pkl);
 
+	GI_UNLOCK();
 	return pkllen;
 }
 
 local void set_arena_data(Arena *a, void *data, int len, void *v)
 {
+	NEEDS_GIL;
 	struct pypersist_apd *pyapd = v;
 	PyObject *buf, *val, *ret;
 
+	GI_LOCK();
 	buf = PyString_FromStringAndSize(data, len);
 	val = PyObject_CallMethod(cPickle, "loads", "(O)", buf);
 	Py_XDECREF(buf);
 	if (!val)
 	{
 		log_py_exception(L_ERROR, "can't unpickle persistent data");
+		GI_UNLOCK();
 		return;
 	}
 
@@ -1890,17 +2119,21 @@ local void set_arena_data(Arena *a, void *data, int len, void *v)
 	Py_XDECREF(ret);
 	if (!ret)
 		log_py_exception(L_ERROR, "error in persistent data setter");
+	GI_UNLOCK();
 }
 
 local void clear_arena_data(Arena *a, void *v)
 {
+	NEEDS_GIL;
 	struct pypersist_apd *pyapd = v;
 	PyObject *ret;
 
+	GI_LOCK();
 	ret = PyObject_CallMethod(pyapd->funcs, "clear", "(O&)", cvt_c2p_arena, a);
 	Py_XDECREF(ret);
 	if (!ret)
 		log_py_exception(L_ERROR, "error in persistent data clearer");
+	GI_UNLOCK();
 }
 
 
@@ -2004,21 +2237,21 @@ local PyObject * mthd_for_each_arena(PyObject *self, PyObject *args)
 local PyObject * mthd_is_standard(PyObject *self, PyObject *args)
 {
 	Player *p;
-	if (!PyArg_ParseTuple(args, "O&", cvt_p2c_player, &p)) return NULL;
+	if (!PyArg_ParseTuple(args, "O&", cvt_p2c_player_not_none, &p)) return NULL;
 	return PyInt_FromLong(IS_STANDARD(p));
 }
 
 local PyObject * mthd_is_chat(PyObject *self, PyObject *args)
 {
 	Player *p;
-	if (!PyArg_ParseTuple(args, "O&", cvt_p2c_player, &p)) return NULL;
+	if (!PyArg_ParseTuple(args, "O&", cvt_p2c_player_not_none, &p)) return NULL;
 	return PyInt_FromLong(IS_CHAT(p));
 }
 
 local PyObject * mthd_is_human(PyObject *self, PyObject *args)
 {
 	Player *p;
-	if (!PyArg_ParseTuple(args, "O&", cvt_p2c_player, &p)) return NULL;
+	if (!PyArg_ParseTuple(args, "O&", cvt_p2c_player_not_none, &p)) return NULL;
 	return PyInt_FromLong(IS_HUMAN(p));
 }
 
@@ -2149,7 +2382,7 @@ local int unload_py_module(mod_args_t *args)
 	if (mod->ob_refcnt != 2)
 	{
 		lm->Log(L_WARN, "<pymod> there are %lu remaining references to module %s",
-				(unsigned long)mod->ob_refcnt, mname);
+				(unsigned long)mod->ob_refcnt - 2, mname);
 		return MM_FAIL;
 	}
 
@@ -2190,27 +2423,45 @@ local int call_maybe_with_arena(PyObject *mod, const char *funcname, Arena *a)
 
 local int pyloader(int action, mod_args_t *args, const char *line, Arena *arena)
 {
+	NEEDS_GIL;
+	int r;
+
+	GI_LOCK();
+
 	switch (action)
 	{
 		case MM_LOAD:
-			return load_py_module(args, line);
+			r = load_py_module(args, line);
+			GI_UNLOCK();
+			return r;
 
 		case MM_UNLOAD:
-			return unload_py_module(args);
+			r = unload_py_module(args);
+			GI_UNLOCK();
+			return r;
 
 		case MM_ATTACH:
-			return call_maybe_with_arena(args->privdata, "mm_attach", arena);
+			r = call_maybe_with_arena(args->privdata, "mm_attach", arena);
+			GI_UNLOCK();
+			return r;
 
 		case MM_DETACH:
-			return call_maybe_with_arena(args->privdata, "mm_detach", arena);
+			r = call_maybe_with_arena(args->privdata, "mm_detach", arena);
+			GI_UNLOCK();
+			return r;
 
 		case MM_POSTLOAD:
-			return call_maybe_with_arena(args->privdata, "mm_postload", NULL);
+			r = call_maybe_with_arena(args->privdata, "mm_postload", NULL);
+			GI_UNLOCK();
+			return r;
 
 		case MM_PREUNLOAD:
-			return call_maybe_with_arena(args->privdata, "mm_preunload", NULL);
+			r = call_maybe_with_arena(args->privdata, "mm_preunload", NULL);
+			GI_UNLOCK();
+			return r;
 
 		default:
+			GI_UNLOCK();
 			return MM_FAIL;
 	}
 }
@@ -2219,6 +2470,7 @@ EXPORT const char info_pymod[] = CORE_MOD_INFO("pymod");
 
 EXPORT int MM_pymod(int action, Imodman *mm_, Arena *arena)
 {
+	NEEDS_GIL;
 	Player *p;
 	Link *link;
 #ifdef CHECK_SIGS
@@ -2226,6 +2478,7 @@ EXPORT int MM_pymod(int action, Imodman *mm_, Arena *arena)
 #endif
 	if (action == MM_LOAD)
 	{
+		main_thread = pthread_self();
 		/* grab some modules */
 		mm = mm_;
 		pd = mm->GetInterface(I_PLAYERDATA, ALLARENAS);
@@ -2253,6 +2506,12 @@ EXPORT int MM_pymod(int action, Imodman *mm_, Arena *arena)
 #endif
 		/* start up python */
 		Py_Initialize();
+		// Python might be called by multiple threads,
+		// set up the global interpreter lock
+		PyEval_InitThreads();
+		++gil_main_lock_count; // PyEval_InitThreads locks
+		gil_main_lock = 1;
+		gstate = 0;
 #ifdef CHECK_SIGS
 		/* if python changed this, reset it */
 		sigaction(SIGINT, &sa_before, NULL);
@@ -2263,14 +2522,16 @@ EXPORT int MM_pymod(int action, Imodman *mm_, Arena *arena)
 			const char *tmp = NULL;
 			while (strsplit(CFG_PYTHON_IMPORT_PATH, ":", dir, sizeof(dir), &tmp))
 			{
-				if (snprintf(code, sizeof(code),
-							"import sys, os\n"
-							"sys.path.append(os.path.join(os.getcwd(), '%s'))\n",
-							dir) > sizeof(code))
+				int wouldWrite = snprintf(code, sizeof(code),
+					"import sys, os\n"
+					"sys.path.append(os.path.join(os.getcwd(), '%s'))\n",
+					dir);
+				if (wouldWrite < 0 || (size_t) wouldWrite > sizeof(code))
 					continue;
 				PyRun_SimpleString(code);
 			}
 		}
+
 		/* add our module */
 		init_asss_module();
 		init_py_callbacks();
@@ -2302,6 +2563,7 @@ EXPORT int MM_pymod(int action, Imodman *mm_, Arena *arena)
 
 		mods_loaded = 0;
 
+		GI_UNLOCK();
 		return MM_OK;
 	}
 	else if (action == MM_UNLOAD)
@@ -2309,6 +2571,8 @@ EXPORT int MM_pymod(int action, Imodman *mm_, Arena *arena)
 		/* check that there are no more python modules loaded */
 		if (mods_loaded)
 			return MM_FAIL;
+
+		GI_LOCK();
 
 		mm->UnregModuleLoader("py", pyloader);
 

@@ -52,7 +52,7 @@ def const_callback(n):
 
 def const_interface(n):
 	const_file.write('PYINTERFACE(%s)\n' % n);
-	
+
 def const_adviser(n):
 	const_file.write('PYADVISER(%s)\n' % n);
 
@@ -457,7 +457,7 @@ def create_c_to_py_func(name, func):
 			else:
 				decls.append('\t%s;' % (typ.buf_decl(vargname)))
 				outformat.append(typ.format_char())
-			informat.append(typ.format_char())			
+			informat.append(typ.format_char())
 			try:
 				inargs.append(typ.parse_converter())
 			except:
@@ -763,6 +763,7 @@ def translate_pycb(name, ctype, line):
 	{
 		log_py_exception(L_ERROR, "python error building args for "
 			"callback %(name)s");
+		GI_UNLOCK();
 		return;
 	}
 """
@@ -774,13 +775,18 @@ def translate_pycb(name, ctype, line):
 	code.append("""
 local %(retdecl)s %(funcname)s(%(allargs)s)
 {
+	NEEDS_GIL;
+	GI_LOCK();
 	PyObject *args, *out;
 	LinkedList cbs = LL_INITIALIZER;
 	Link *l;
 %(decls)s
 	mm->LookupCallback(PYCBPREFIX %(name)s, %(arenaval)s, &cbs);
 	if (LLIsEmpty(&cbs))
+	{
+		GI_UNLOCK();
 		return;
+	}
 """)
 	if not outargs:
 		code.append(buildcode)
@@ -831,6 +837,7 @@ local %(retdecl)s %(funcname)s(%(allargs)s)
 		code.append(decref)
 	code.append("""
 	LLEmpty(&cbs);
+	GI_UNLOCK();
 }
 """)
 	code = ''.join(code) % cbvars
@@ -1054,6 +1061,8 @@ local PyTypeObject %(typestructname)s = {
 			code.append("""
 local %(retdecl)s %(funcname)s(%(allargs)s)
 {
+	NEEDS_GIL;
+	GI_LOCK();
 	PyObject *args, *out;
 %(decls)s
 	args = Py_BuildValue("(%(informat)s)"%(inargs)s);
@@ -1061,6 +1070,7 @@ local %(retdecl)s %(funcname)s(%(allargs)s)
 	{
 		log_py_exception(L_ERROR, "python error building args for "
 				"function %(name)s in interface %(iid)s");
+		GI_UNLOCK();
 		return %(defretval)s;
 	}
 	out = call_gen_py_interface(PYINTPREFIX %(iid)s, "%(name)s", args, %(arenaval)s);
@@ -1068,6 +1078,7 @@ local %(retdecl)s %(funcname)s(%(allargs)s)
 	{
 		log_py_exception(L_ERROR, "python error calling "
 				"function %(name)s in interface %(iid)s");
+		GI_UNLOCK();
 		return %(defretval)s;
 	}
 """)
@@ -1078,6 +1089,7 @@ local %(retdecl)s %(funcname)s(%(allargs)s)
 		Py_DECREF(out);
 		log_py_exception(L_ERROR, "python error unpacking results of "
 				"function %(name)s in interface %(iid)s");
+		GI_UNLOCK();
 		return %(defretval)s;
 	}
 """)
@@ -1087,12 +1099,14 @@ local %(retdecl)s %(funcname)s(%(allargs)s)
 	{
 		Py_DECREF(out);
 		log_py_exception(L_ERROR, "interface func %(name)s didn't return None as expected");
+		GI_UNLOCK();
 		return %(defretval)s;
 	}
 """)
 			code.append("""
 %(extras3)s
 	Py_DECREF(out);
+	GI_UNLOCK();
 	return %(retorblank)s;
 }
 """)
@@ -1313,13 +1327,16 @@ local PyTypeObject %(typestructname)s = {
 			code.append("""
 local %(retdecl)s %(funcname)s(%(allargs)s)
 {
+	NEEDS_GIL;
 	PyObject *args, *out;
+	GI_LOCK();
 %(decls)s
 	args = Py_BuildValue("(%(informat)s)"%(inargs)s);
 	if (!args)
 	{
 		log_py_exception(L_ERROR, "python error building args for "
 				"function %(name)s in adviser %(aid)s");
+		GI_UNLOCK();
 		return %(defretval)s;
 	}
 	out = call_gen_py_adviser(PYADVPREFIX %(aid)s, "%(name)s", args, %(arenaval)s);
@@ -1327,6 +1344,7 @@ local %(retdecl)s %(funcname)s(%(allargs)s)
 	{
 		log_py_exception(L_ERROR, "python error calling "
 				"function %(name)s in adviser %(aid)s");
+		GI_UNLOCK();
 		return %(defretval)s;
 	}
 """)
@@ -1337,6 +1355,7 @@ local %(retdecl)s %(funcname)s(%(allargs)s)
 		Py_DECREF(out);
 		log_py_exception(L_ERROR, "python error unpacking results of "
 				"function %(name)s in adviser %(aid)s");
+		GI_UNLOCK();
 		return %(defretval)s;
 	}
 """)
@@ -1346,12 +1365,14 @@ local %(retdecl)s %(funcname)s(%(allargs)s)
 	{
 		Py_DECREF(out);
 		log_py_exception(L_ERROR, "adviser func %(name)s didn't return None as expected");
+		GI_UNLOCK();
 		return %(defretval)s;
 	}
 """)
 			code.append("""
 %(extras3)s
 	Py_DECREF(out);
+	GI_UNLOCK();
 	return %(retorblank)s;
 }
 """)
@@ -1856,7 +1877,7 @@ for l in lines:
 			const_interface(lastintdef)
 			translate_pyint(lastintdef, lasttypedef, intdirs)
 			intdirs = []
-			
+
 	# advisers
 	m = re_pyadv_advdef.match(l)
 	if m:
@@ -1877,7 +1898,7 @@ for l in lines:
 			const_adviser(lastadvdef)
 			translate_pyadv(lastadvdef, lastadvtypedef, advdirs)
 			advdirs = []
-	
+
 	# types
 	m = re_pytype.match(l)
 	if m:
