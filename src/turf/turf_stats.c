@@ -263,8 +263,11 @@ local void postReward(Arena *arena, TurfArena *ta)
 		}
 
 		l = LLGetHead(&ts->stats);  /* l now points to the end of the LinkedList */
-		data = l->data;
-		LLRemove(&ts->stats, data); /* remove the link */
+		if (l) {
+			data = l->data;
+			LLRemove(&ts->stats, data); /* remove the link */
+		}
+
 		ts->numStats--;
 	}
 
