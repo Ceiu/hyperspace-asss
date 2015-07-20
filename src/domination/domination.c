@@ -36,7 +36,9 @@
 
 #include "domination.h"
 
-
+// TODO:
+// - Deal with synchronization issues. Lots of timers and junk here, which likely means lots of
+//   threads. Need locks all over the place in here.
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 // Global Definitions
@@ -49,6 +51,12 @@
 #define DOM_CLAMP(val, min, max) HSC_MIN(HSC_MAX((val), (min)), (max))
 
 #define DOM_NEUTRAL_FREQ -1
+
+#define DOM_REGION_CFG_KEY(region_num, key_name) "region" #region_num "-" #key_name
+#define DOM_TEAM_CFG_KEY(team_num, key_name) "team" #team_num "-" #key_name
+#define DOM_FLAG_CFG_KEY(flag_num, key_name) "flag" #flag_num "-" #key_name
+
+
 
 struct DomArena {
   Arena *arena;
@@ -65,8 +73,8 @@ struct DomArena {
   DomGameState game_state;
   u_int32_t game_time_remaining;
 
-
   u_int32_t cfg_team_count;
+  u_int32_t cfg_region_count;
   u_int32_t cfg_min_players;
   u_int32_t cfg_min_players_per_team;
   u_int32_t cfg_game_duration;
@@ -90,19 +98,21 @@ struct DomRegion {
 
   DomRegionState state;
   Region *region;
-  const char *region_name;
 
   HashTable flags;
   short flags_loaded;
+
+  int controlling_freq;
+  u_int32_t controller_influence;
+
+  /* The name of the region */
+  const char *cfg_region_name;
 
   /* Amount of control points provided by this region */
   u_int32_t cfg_region_value;
 
   /* Amount of influence required to control this region */
   u_int32_t cfg_required_influence;
-
-  int controller_freq;
-  u_int32_t controller_influence;
 };
 
 struct DomFlag {
@@ -114,15 +124,15 @@ struct DomFlag {
   HashTable regions;
   short regions_loaded;
 
-  /* Amount of requisition provided by this flag */
-  u_int32_t cfg_flag_requisition;
-
   /* Controlling freq and their current influence */
-  int controller_freq;
-  u_int32_t influence;
+  int controlling_freq;
+  u_int32_t controller_influence;
 
   /* The freq that controls the physical flag; used for state management */
   int flag_freq;
+
+  /* Amount of requisition provided by this flag */
+  u_int32_t cfg_flag_requisition;
 };
 
 
@@ -150,13 +160,38 @@ static int pdkey;
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
+static void SetErrorState(Arena *arena, const char* message, ...) ATTR_FORMAT(printf, 3, 4) {
+  DomArena *adata = P_ARENA_DATA(arena, adkey);
+
+  ClearGameTimers(arena);
+  adata->game_state = DOM_GAME_STATE_ERROR;
+
+  lm->LogA(L_ERROR, DOM_MODULE_NAME, arena, message);
+
+  Link *link;
+  Player *player;
+  LinkedList set;
+
+  LLInit(&set);
+
+  FOR_EACH_PLAYER(player) {
+    if (player->arena == arena) {
+      LLAdd(&set, player);
+    }
+  }
+
+  va_list args;
+  va_start(args, message);
+  chat->SendAnyMessage(&set, MSG_SYSOPWARNING, SOUND_BEEP2, NULL, message, args);
+  va_end(args);
+
+  LLEmpty(&set);
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
 
 static void InitArenaData(Arena *arena) {
-  ArenaGameData *adata = P_ARENA_DATA(arena, adkey);
-
-  HashInit(&adata->teams);
-  HashInit(&adata->regions);
-  HashInit(&adata->flags);
+  DomArena *adata = P_ARENA_DATA(arena, adkey);
 
   adata->teams_loaded = 0;
   adata->regions_loaded = 0;
@@ -166,13 +201,160 @@ static void InitArenaData(Arena *arena) {
   adata->game_time_remaining = 0;
 }
 
+static DomRegion* AllocRegion(Arena *arena) {
+  DomRegion *dregion = malloc(sizeof(DomRegion));
+
+  if (region) {
+    dregion->arena = arena;
+
+    dregion->state = DOM_REGION_STATE_NEUTRAL;
+    dregion->region = NULL;
+    dregion->region_name = NULL;
+
+    HashInit(&dregion->regions);
+    dregion->flags_loaded = 0;
+
+    dregion->cfg_region_value = 0;
+    dregion->cfg_required_influence = 0;
+
+    dregion->controlling_freq = DOM_NEUTRAL_FREQ;
+    dregion->controller_influence = 0;
+  } else {
+    SetErrorState(arena, "ERROR: Unable to allocate memory for a new DomRegion instance");
+  }
+
+  return dregion;
+}
+
+static void LoadRegionData(Arena *arena) {
+  DomArena *adata = P_ARENA_DATA(arena, adkey);
+
+  if (adata->regions_loaded) {
+    FreeRegionData(arena);
+  }
+
+  for (int i = 0; i < adata->cfg_region_count; ++i) {
+    DomRegion *dregion = AllocRegion(arena);
+
+    char cfg_key[255];
+
+    if (dregion) {
+      /* cfghelp: Domination:Region1-MapRegionName, arena, string
+       * The name of the map region to use for this domination region. If omitted or invalid, an
+       * error will be raised and the game will not start. */
+      sprintf(cfg_key, "Region%d-%s", i + 1, "MapRegionName");
+      dregion->cfg_region_name = cfg->GetStr(adata->cfg, "Domination", cfg_key);
+      dregion->region = mapdata->FindRegionByName(arena, dregion->cfg_region_name);
+
+      /* cfghelp: Domination:Region1-Value, arena, int, default: 1
+       * The amount of control points this region is worth when controlled. If set to a value lower
+       * than 1, the value will be set to 1. */
+      sprintf(cfg_key, "Region%d-%s", i + 1, "Value");
+      dregion->cfg_region_name = DOM_MAX(cfg->GetInt(adata->cfg, "Domination", cfg_key, 1), 1);
+
+      /* cfghelp: Domination:Region1-RequiredInfluence, arena, int, default: 100
+       * The required amount of influence to control this region. If set to a value lower than 1,
+       * the region will require 1 influence. */
+      sprintf(cfg_key, "Region%d-%s", i + 1, "RequiredInfluence");
+      dregion->cfg_region_name = DOM_MAX(cfg->GetInt(adata->cfg, "Domination", cfg_key, 100), 1);
+
+      if (!dregion->region) {
+        SetErrorState(arena, "ERROR: Invalid value defined for RegionName for region %d: %s", i + 1, dregion->cfg_region_name);
+        break;
+      }
+    }
+  }
+}
+
+static void FreeRegion(DomRegion *dregion) {
+  if (dregion->flags_loaded) {
+    HashDeinit(&dregion->regions);
+    dregion->flags_loaded = 0;
+  }
+
+  free(dregion);
+}
+
+static void FreeRegionHashEnum(const char *key, void *val, void *clos) {
+  FreeRegion((DomRegion*) val);
+  return 1;
+}
+
+static void ClearFlagRegionDataHashEnum(const char *key, void *val, void *clos) {
+  DomFlag *dflag = ((DomFlag*) val);
+
+  if (dflag->regions_loaded) {
+    HashDeinit(&dflag->regions);
+    dflag->regions_loaded = 0;
+  }
+
+  return 0;
+}
+
+static void FreeRegionData(Arena *arena) {
+  DomArena *adata = P_ARENA_DATA(arena, adkey);
+
+  if (adata->flags_loaded) {
+    // We need to free region data associated with flags as well, or we risk segfaulting
+    HashEnum(&adata->flags, ClearFlagRegionDataHashEnum, NULL);
+  }
+
+  if (adata->regions_loaded) {
+    HashEnum(&adata->regions, FreeRegionHashEnum, NULL);
+    HashDeinit(&adata->regions);
+    adata->regions_loaded = 0;
+  }
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
+
+
+
+
+
+
+
+
+
+
+
+static void ReadMapData(Arena *arena) {
+  DomArena *adata = P_ARENA_DATA(arena, adkey);
+
+  // Load regions data
+  if (adata->regions_loaded) {
+
+    HashInit(&adata->regions);
+
+    adata->regions_loaded = 0;
+  }
+
+  for (int i = 1; i <= adata->cfg_region_count; ++i) {
+
+
+  }
+
+
+
+
+
+  // Load flag data
+
+}
+
 static void ReadArenaConfig(Arena *arena) {
-  ArenaGameData *adata = P_ARENA_DATA(arena, adkey);
+  DomArena *adata = P_ARENA_DATA(arena, adkey);
 
   /* cfghelp: Domination:TeamCount, arena, int, def: 3
    * The number of teams allowed to participate in the domination game. If this value is less
    * than two, two teams will be used. */
   adata->cfg_team_count = DOM_MAX(cfg->getInt(arena->cfg, "Domination", "TeamCount", 3), 2);
+
+  /* cfghelp: Domination:RegionCount, arena, int, range:1-255, def: 1
+   * The number of regions to contested as part of the game. Each region will need to be configured
+   * with the Domination:Region#-* settings. */
+  adata->cfg_team_count = DOM_CLAMP(cfg->getInt(arena->cfg, "Domination", "RegionCount", 1), 1, 255);
 
   /* cfghelp: Domination:MinimumPlayers, arena, int, def: 3
    * The minimum number of active players in the arena required to start a new game. If set to zero,
@@ -563,9 +745,11 @@ static int GetInterfaces(Imodman *modman, Arena *arena)
     flagcore  = mm->GetInterface(I_FLAG, ALLARENAS);
     lm        = mm->GetInterface(I_LOGMAN, ALLARENAS);
     mainloop  = mm->GetInterface(I_MAINLOOP, ALLARENAS);
+    mapdata   = mm->GetInterface(I_MAPDATA, ALLARENAS);
     pd        = mm->GetInterface(I_PLAYERDATA, ALLARENAS);
 
-    return mm && (arenaman && cfg && chat && flagcore && lm && mainloop && pd);
+    return mm &&
+      (arenaman && cfg && chat && flagcore && lm && mainloop && mapdata && pd);
   }
 
   return 0;
@@ -584,6 +768,7 @@ static void ReleaseInterfaces()
     mm->ReleaseInterface(flagcore);
     mm->ReleaseInterface(lm);
     mm->ReleaseInterface(mainloop);
+    mm->ReleaseInterface(mapdata);
     mm->ReleaseInterface(pd);
 
     mm = NULL;

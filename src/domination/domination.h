@@ -19,7 +19,11 @@ typedef enum {
   DOM_GAME_STATE_PAUSED,
 
   /* The current game has just finished and modules are processing the end-of-game event */
-  DOM_GAME_STATE_FINISHED
+  DOM_GAME_STATE_FINISHED,
+
+  /* An error occurred at some point during the game. Once in this state, any existing game will
+   * lost and no new games will be started. */
+  DOM_GAME_STATE_ERROR
 } DomGameState;
 
 /**
