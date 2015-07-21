@@ -52,10 +52,6 @@
 
 #define DOM_NEUTRAL_FREQ -1
 
-#define DOM_REGION_CFG_KEY(region_num, key_name) "region" #region_num "-" #key_name
-#define DOM_TEAM_CFG_KEY(team_num, key_name) "team" #team_num "-" #key_name
-#define DOM_FLAG_CFG_KEY(flag_num, key_name) "flag" #flag_num "-" #key_name
-
 
 
 struct DomArena {
@@ -118,6 +114,7 @@ struct DomRegion {
 struct DomFlag {
   Arena *arena;
   int flag_id;
+  int x, y;
 
   DomFlagState state;
 
@@ -204,14 +201,13 @@ static void InitArenaData(Arena *arena) {
 static DomRegion* AllocRegion(Arena *arena) {
   DomRegion *dregion = malloc(sizeof(DomRegion));
 
-  if (region) {
+  if (dregion) {
     dregion->arena = arena;
 
     dregion->state = DOM_REGION_STATE_NEUTRAL;
     dregion->region = NULL;
     dregion->region_name = NULL;
 
-    HashInit(&dregion->regions);
     dregion->flags_loaded = 0;
 
     dregion->cfg_region_value = 0;
@@ -229,40 +225,54 @@ static DomRegion* AllocRegion(Arena *arena) {
 static void LoadRegionData(Arena *arena) {
   DomArena *adata = P_ARENA_DATA(arena, adkey);
 
-  if (adata->regions_loaded) {
-    FreeRegionData(arena);
-  }
+  if (!adata->regions_loaded) {
+    HashInit(&adata->regions);
+    int loaded = 1;
 
-  for (int i = 0; i < adata->cfg_region_count; ++i) {
-    DomRegion *dregion = AllocRegion(arena);
+    for (int i = 0; i < adata->cfg_region_count; ++i) {
+      DomRegion *dregion = AllocRegion(arena);
 
-    char cfg_key[255];
+      if (dregion) {
+        char cfg_key[255];
 
-    if (dregion) {
-      /* cfghelp: Domination:Region1-MapRegionName, arena, string
-       * The name of the map region to use for this domination region. If omitted or invalid, an
-       * error will be raised and the game will not start. */
-      sprintf(cfg_key, "Region%d-%s", i + 1, "MapRegionName");
-      dregion->cfg_region_name = cfg->GetStr(adata->cfg, "Domination", cfg_key);
-      dregion->region = mapdata->FindRegionByName(arena, dregion->cfg_region_name);
+        /* cfghelp: Domination:Region1-MapRegionName, arena, string
+         * The name of the map region to use for this domination region. If omitted or invalid, an
+         * error will be raised and the game will not start.
+         * Note: this setting is case-sensitive. */
+        sprintf(cfg_key, "Region%d-%s", i + 1, "MapRegionName");
+        dregion->cfg_region_name = cfg->GetStr(adata->cfg, "Domination", cfg_key);
+        dregion->region = mapdata->FindRegionByName(arena, dregion->cfg_region_name);
 
-      /* cfghelp: Domination:Region1-Value, arena, int, default: 1
-       * The amount of control points this region is worth when controlled. If set to a value lower
-       * than 1, the value will be set to 1. */
-      sprintf(cfg_key, "Region%d-%s", i + 1, "Value");
-      dregion->cfg_region_name = DOM_MAX(cfg->GetInt(adata->cfg, "Domination", cfg_key, 1), 1);
+        /* cfghelp: Domination:Region1-Value, arena, int, default: 1
+         * The amount of control points this region is worth when controlled. If set to a value lower
+         * than 1, the value will be set to 1. */
+        sprintf(cfg_key, "Region%d-%s", i + 1, "Value");
+        dregion->cfg_region_name = DOM_MAX(cfg->GetInt(adata->cfg, "Domination", cfg_key, 1), 1);
 
-      /* cfghelp: Domination:Region1-RequiredInfluence, arena, int, default: 100
-       * The required amount of influence to control this region. If set to a value lower than 1,
-       * the region will require 1 influence. */
-      sprintf(cfg_key, "Region%d-%s", i + 1, "RequiredInfluence");
-      dregion->cfg_region_name = DOM_MAX(cfg->GetInt(adata->cfg, "Domination", cfg_key, 100), 1);
+        /* cfghelp: Domination:Region1-RequiredInfluence, arena, int, default: 100
+         * The required amount of influence to control this region. If set to a value lower than 1,
+         * the region will require 1 influence. */
+        sprintf(cfg_key, "Region%d-%s", i + 1, "RequiredInfluence");
+        dregion->cfg_region_name = DOM_MAX(cfg->GetInt(adata->cfg, "Domination", cfg_key, 300), 1);
 
-      if (!dregion->region) {
-        SetErrorState(arena, "ERROR: Invalid value defined for RegionName for region %d: %s", i + 1, dregion->cfg_region_name);
-        break;
+        if (!dregion->region) {
+          SetErrorState(arena, "ERROR: Invalid value defined for RegionName for region %d: %s", i + 1, dregion->cfg_region_name);
+
+          HashEnum(&adata->regions, FreeRegionHashEnum, NULL);
+          HashDeinit(&adata->regions);
+          loaded = 0;
+          break;
+        }
+
+        HashReplace(&adata->regions, dregion->cfg_region_name, dregion);
+      } else {
+        HashEnum(&adata->regions, FreeRegionHashEnum, NULL);
+        HashDeinit(&adata->regions);
+        loaded = 0;
       }
     }
+
+    adata->regions_loaded = loaded;
   }
 }
 
@@ -275,13 +285,13 @@ static void FreeRegion(DomRegion *dregion) {
   free(dregion);
 }
 
-static void FreeRegionHashEnum(const char *key, void *val, void *clos) {
-  FreeRegion((DomRegion*) val);
+static void FreeRegionHashEnum(const char *key, void *value, void *clos) {
+  FreeRegion((DomRegion*) value);
   return 1;
 }
 
-static void ClearFlagRegionDataHashEnum(const char *key, void *val, void *clos) {
-  DomFlag *dflag = ((DomFlag*) val);
+static void ClearFlagRegionDataHashEnum(const char *key, void *value, void *clos) {
+  DomFlag *dflag = ((DomFlag*) value);
 
   if (dflag->regions_loaded) {
     HashDeinit(&dflag->regions);
@@ -308,8 +318,117 @@ static void FreeRegionData(Arena *arena) {
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
+static DomFlag* AllocFlag(Arena *arena) {
+  DomFlag *dflag = malloc(sizeof(DomFlag));
 
+  if (dflag) {
+    dflag->arena = arena;
+    dflag->flag_id = -1;
+    dflag->x = -1;
+    dflag->y = -1;
 
+    dflag->state = DOM_FLAG_STATE_NEUTRAL;
+
+    dflag->regions_loaded = 0;
+
+    dflag->controlling_freq = DOM_NEUTRAL_FREQ;
+    dflag->controller_influence = 0;
+
+    dflag->flag_freq = DOM_NEUTRAL_FREQ;
+
+    dflag->cfg_flag_requisition = 0;
+  } else {
+    SetErrorState(arena, "ERROR: Unable to allocate memory for a new DomFlag instance");
+  }
+
+  return dflag;
+}
+
+static void AddFlagRegions(Region *region, void *arg) {
+  DomFlag *dflag = ((DomFlag*) arg);
+  DomArena *adata = P_ARENA_DATA(dflag->arena, adkey);
+
+  // Check that the region is one we're managing
+  char *region_name = mapdata->RegionName(region);
+  DomRegion *dregion = HashGetOne(&adata->regions, region_name);
+
+  if (dregion) {
+    HashReplace(&dflag->regions, region_name, dregion);
+  }
+}
+
+static void LoadFlagData(Arena *arena) {
+  DomArena *adata = P_ARENA_DATA(arena, adkey);
+
+  if (!adata->regions_loaded) {
+    if (!LoadRegionData(arena)) {
+      // We'll already be in an error state at this point -- no need to do it again.
+      return;
+    }
+  }
+
+  int flag_id = 0;
+  int loaded = 1;
+  FlagInfo flag_info = { FI_ONMAP, NULL, -1, -1, DOM_NEUTRAL_FREQ };
+
+  for (int y = 0; y < 1023; ++y) {
+    for (int x = 0; x < 1023; ++x) {
+      if (mapdata->GetTile(arena, x, y) == TILE_TURF_FLAG) {
+        DomRegion *dflag = AllocFlag(arena);
+
+        if (dflag) {
+          char cfg_key[255];
+
+          dflag->flag_id = flag_id++;
+          dflag->x = x;
+          dflag->y = y;
+
+          /* cfghelp: Domination:Flag1-Requisition, arena, int,
+           * The amount of requisition this flag is worth. */
+          sprintf(cfg_key, "Flag%d-%s", i + 1, "Requisition");
+          dregion->cfg_flag_requisition = cfg->GetInt(adata->cfg, "Domination", cfg_key, 1);
+
+          mapdata->EnumContaining(arena, x, y, AddFlagRegions, dflag);
+
+          flagcore->SetFlags(arena, dflag->flag_id, &flag_info, 1);
+        } else {
+          HashEnum(&adata->flags, FreeFlagHashEnum, NULL);
+          HashDeinit(&adata->flags);
+          loaded = 0;
+          x = y = 1024;
+        }
+      }
+    }
+  }
+
+  adata->flags_loaded = loaded;
+}
+
+static void FreeFlag(DomFlag *dflag) {
+  if (dflag->regions_loaded) {
+    HashDeinit(&dflag->regions);
+    dflag->regions_loaded = 0;
+  }
+
+  free(dflag);
+}
+
+static void FreeFlagHashEnum(const char *key, void *value, void *clos) {
+  FreeFlag((DomFlag*) value);
+  return 1;
+}
+
+static void FreeFlagData(Arena *arena) {
+  DomArena *adata = P_ARENA_DATA(arena, adkey);
+
+  if (adata->flags_loaded) {
+    HashEnum(&adata->flags, FreeFlagHashEnum, NULL);
+    HashDeinit(&adata->flags);
+    adata->flags_loaded = 0;
+  }
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
 
 
 
@@ -398,15 +517,15 @@ static void ReadArenaConfig(Arena *arena) {
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
-static DomFlag* GetDomFlag(int flag_id) {
+static DomFlag* GetDomFlag(Arena *arena, int flag_id) {
 
 }
 
-static DomTeam* GetDomTeam(int freq) {
+static DomTeam* GetDomTeam(Arena *arena, int freq) {
 
 }
 
-static DomRegion* GetDomRegion(const char *region) {
+static DomRegion* GetDomRegion(Arena *arena, const char *region) {
 
 }
 
