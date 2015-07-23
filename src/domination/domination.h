@@ -64,6 +64,7 @@ typedef enum {
 
 typedef struct DomArena DomArena;
 typedef struct DomTeam DomTeam;
+typedef struct DomPlayer DomPlayer;
 typedef struct DomRegion DomRegion;
 typedef struct DomFlag DomFlag;
 

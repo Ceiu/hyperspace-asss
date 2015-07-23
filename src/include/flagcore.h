@@ -100,6 +100,15 @@ typedef struct Iflagcore
 	int (*CountPlayerFlags)(Player *p);
 	int (*IsWinning)(Arena *a, int freq);
 
+	/**
+	 * Forces an immediate update of the turf flag statuses. Does nothing if the carry mode is not
+	 * CARRY_NONE.
+	 *
+	 * @param *arena
+	 *	A pointer to the arena in which the status update should be sent
+	 */
+	void (*SendTurfStatus)(Arena *arena);
+
 	/* used during initialization: */
 
 	void (*SetCarryMode)(Arena *a, int carrymode);

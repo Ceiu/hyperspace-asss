@@ -136,15 +136,17 @@ local int make_turf_packet(Arena *a, struct SimplePacketA *pkt)
 	return 1 + fc * 2;
 }
 
-local int send_turf_timer(void *av)
-{
-	Arena *a = av;
+local void SendTurfStatus(Arena *arena) {
 	u16 buf[MAXFLAGS+2];
 	struct SimplePacketA *pkt = (struct SimplePacketA*)buf;
 
-	net->SendToArena(a, NULL, (byte*)pkt, make_turf_packet(a, pkt), NET_UNRELIABLE);
+	net->SendToArena(arena, NULL, (byte*)pkt, make_turf_packet(arena, pkt), NET_UNRELIABLE);
 	/* lm->Log(L_DRIVEL, "DBG: sending turf ownership pkt to arena"); */
+}
 
+local int send_turf_timer(void *av)
+{
+	SendTurfStatus((Arena*) av);
 	return TRUE;
 }
 
@@ -869,7 +871,7 @@ local Iflagcore flagint =
 {
 	INTERFACE_HEAD_INIT(I_FLAGCORE, "flagcore")
 	GetFlags, SetFlags, FlagReset,
-	CountFlags, CountFreqFlags, CountPlayerFlags, IsWinning,
+	CountFlags, CountFreqFlags, CountPlayerFlags, IsWinning, SendTurfStatus,
 	SetCarryMode, ReserveFlags
 };
 
