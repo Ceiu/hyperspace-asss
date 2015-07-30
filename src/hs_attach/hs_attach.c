@@ -73,13 +73,14 @@ local void handle_fee(Player *source, Player *dest, int amount)
 	{
 		int available = database->getMoney(source);
 		int transfer = amount;
-		if (available < amount)
-		{
-			transfer = available;
+		if (available < amount) {
+			transfer = available > 0 ? available : 0;
 		}
 
-		database->addMoney(dest, MONEY_TYPE_GIVE, transfer);
-		database->addMoney(source, MONEY_TYPE_GIVE, -transfer);
+		if (transfer > 0) {
+			database->addMoney(dest, MONEY_TYPE_GIVE, transfer);
+			database->addMoney(source, MONEY_TYPE_GIVE, -transfer);
+		}
 	}
 }
 
