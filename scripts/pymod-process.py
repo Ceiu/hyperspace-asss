@@ -263,6 +263,17 @@ class type_player(type_gen):
 	def parse_converter(me):
 		return 'cvt_p2c_player'
 
+class type_player_not_none(type_gen):
+	def format_char(me):
+		return 'O&'
+	def decl(me, s):
+		return 'Player *' + s
+	def build_converter(me):
+		return 'cvt_c2p_player_not_none'
+	def parse_converter(me):
+		return 'cvt_p2c_player_not_none'
+
+
 class type_arena(type_gen):
 	def format_char(me):
 		return 'O&'
@@ -272,6 +283,16 @@ class type_arena(type_gen):
 		return 'cvt_c2p_arena'
 	def parse_converter(me):
 		return 'cvt_p2c_arena'
+
+class type_arena_not_none(type_gen):
+	def format_char(me):
+		return 'O&'
+	def decl(me, s):
+		return 'Arena *' + s
+	def build_converter(me):
+		return 'cvt_c2p_arena_not_none'
+	def parse_converter(me):
+		return 'cvt_p2c_arena_not_none'
 
 class type_config(type_gen):
 	def format_char(me):
@@ -427,9 +448,9 @@ def create_c_to_py_func(name, func):
 			allargs.append(typ.decl(argname))
 
 			# the arena value can only be an inarg
-			if av_arena is None and arg.tp == 'arena':
+			if av_arena is None and (arg.tp == 'arena' or arg.tp == 'arena_not_none'):
 				av_arena = argname
-			elif av_player is None and arg.tp == 'player':
+			elif av_player is None and (arg.tp == 'player' or arg.tp == 'player_not_none'):
 				av_player = argname + '->arena'
 
 		elif 'out' in opts:
@@ -616,6 +637,8 @@ def create_py_to_c_func(func):
 			cbcode.append("""
 local %(retdecl)s %(cbfuncname)s(%(allargs)s)
 {
+	NEEDS_GIL;
+	GI_LOCK();
 	PyObject *args, *out;
 %(decls)s
 	args = Py_BuildValue("(%(informat)s)"%(inargs)s);
@@ -623,6 +646,7 @@ local %(retdecl)s %(cbfuncname)s(%(allargs)s)
 	{
 		log_py_exception(L_ERROR, "python error building args for "
 				"interface argument function");
+		GI_UNLOCK();
 		return %(defretval)s;
 	}
 	out = PyObject_Call(closobj, args, NULL);
@@ -632,6 +656,7 @@ local %(retdecl)s %(cbfuncname)s(%(allargs)s)
 	{
 		log_py_exception(L_ERROR, "python error calling "
 				"interface argument function");
+		GI_UNLOCK();
 		return %(defretval)s;
 	}
 """)
@@ -642,6 +667,7 @@ local %(retdecl)s %(cbfuncname)s(%(allargs)s)
 		Py_DECREF(out);
 		log_py_exception(L_ERROR, "python error unpacking results of "
 				"interface argument function");
+		GI_UNLOCK();
 		return %(defretval)s;
 	}
 """)
@@ -651,12 +677,14 @@ local %(retdecl)s %(cbfuncname)s(%(allargs)s)
 	{
 		Py_DECREF(out);
 		log_py_exception(L_ERROR, "interface argument function didn't return None as expected");
+		GI_UNLOCK();
 		return %(defretval)s;
 	}
 """)
 			cbcode.append("""
 %(extras3)s
 	Py_DECREF(out);
+	GI_UNLOCK();
 }
 """)
 			cbcode = ''.join(cbcode) % cbdict
@@ -982,6 +1010,8 @@ local PyMemberDef %(memberdeclname)s[] = {
 """ % vars()
 		typestructname = 'pyint_%s_type' % iid
 		typedecl = """
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wmissing-field-initializers"
 local PyTypeObject %(typestructname)s = {
 	PyObject_HEAD_INIT(NULL)
 	0,                         /*ob_size*/
@@ -1015,6 +1045,7 @@ local PyTypeObject %(typestructname)s = {
 	%(memberdeclname)s,        /*tp_members*/
 	/* rest are null */
 };
+#pragma GCC diagnostic pop
 """ % vars()
 		doinit = """\
 	if (PyType_Ready(&%(typestructname)s) < 0) return;
@@ -1248,6 +1279,8 @@ local PyMemberDef %(memberdeclname)s[] = {
 """ % vars()
 		typestructname = 'pyadv_%s_type' % aid
 		typedecl = """
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wmissing-field-initializers"
 local PyTypeObject %(typestructname)s = {
 	PyObject_HEAD_INIT(NULL)
 	0,                         /*ob_size*/
@@ -1281,6 +1314,7 @@ local PyTypeObject %(typestructname)s = {
 	%(memberdeclname)s,        /*tp_members*/
 	/* rest are null */
 };
+#pragma GCC diagnostic pop
 """ % vars()
 		doinit = """\
 	if (PyType_Ready(&%(typestructname)s) < 0) return;
@@ -1649,6 +1683,8 @@ local PyGetSetDef %(getsetters)s[] =
 	{NULL}
 };
 
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wmissing-field-initializers"
 local PyTypeObject %(typeobj)s =
 {
 	PyObject_HEAD_INIT(NULL)
@@ -1691,6 +1727,7 @@ local PyTypeObject %(typeobj)s =
 	0,                          /* tp_alloc */
 	0,                          /* tp_new */
 };
+#pragma GCC diagnostic push
 
 ATTR_UNUSED()
 local PyObject * cvt_c2p_%(name)s(void *p)
