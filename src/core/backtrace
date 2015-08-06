@@ -12,6 +12,15 @@ exec >bt/$DATE-$TYPE-$PID.bt 2>&1
 
 echo >$TMP '
 set height 0
+set print symbol-filename on
+set print symbol on
+set print array on
+set print array-indexes on
+set print frame-arguments all
+set print pretty on
+set print union on
+set print object on
+info thread
 thread apply all bt full
 quit
 '

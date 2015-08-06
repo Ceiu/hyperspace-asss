@@ -52,7 +52,7 @@ def const_callback(n):
 
 def const_interface(n):
 	const_file.write('PYINTERFACE(%s)\n' % n);
-	
+
 def const_adviser(n):
 	const_file.write('PYADVISER(%s)\n' % n);
 
@@ -263,6 +263,17 @@ class type_player(type_gen):
 	def parse_converter(me):
 		return 'cvt_p2c_player'
 
+class type_player_not_none(type_gen):
+	def format_char(me):
+		return 'O&'
+	def decl(me, s):
+		return 'Player *' + s
+	def build_converter(me):
+		return 'cvt_c2p_player_not_none'
+	def parse_converter(me):
+		return 'cvt_p2c_player_not_none'
+
+
 class type_arena(type_gen):
 	def format_char(me):
 		return 'O&'
@@ -272,6 +283,16 @@ class type_arena(type_gen):
 		return 'cvt_c2p_arena'
 	def parse_converter(me):
 		return 'cvt_p2c_arena'
+
+class type_arena_not_none(type_gen):
+	def format_char(me):
+		return 'O&'
+	def decl(me, s):
+		return 'Arena *' + s
+	def build_converter(me):
+		return 'cvt_c2p_arena_not_none'
+	def parse_converter(me):
+		return 'cvt_p2c_arena_not_none'
 
 class type_config(type_gen):
 	def format_char(me):
@@ -427,9 +448,9 @@ def create_c_to_py_func(name, func):
 			allargs.append(typ.decl(argname))
 
 			# the arena value can only be an inarg
-			if av_arena is None and arg.tp == 'arena':
+			if av_arena is None and (arg.tp == 'arena' or arg.tp == 'arena_not_none'):
 				av_arena = argname
-			elif av_player is None and arg.tp == 'player':
+			elif av_player is None and (arg.tp == 'player' or arg.tp == 'player_not_none'):
 				av_player = argname + '->arena'
 
 		elif 'out' in opts:
@@ -457,7 +478,7 @@ def create_c_to_py_func(name, func):
 			else:
 				decls.append('\t%s;' % (typ.buf_decl(vargname)))
 				outformat.append(typ.format_char())
-			informat.append(typ.format_char())			
+			informat.append(typ.format_char())
 			try:
 				inargs.append(typ.parse_converter())
 			except:
@@ -616,6 +637,8 @@ def create_py_to_c_func(func):
 			cbcode.append("""
 local %(retdecl)s %(cbfuncname)s(%(allargs)s)
 {
+	NEEDS_GIL;
+	GI_LOCK();
 	PyObject *args, *out;
 %(decls)s
 	args = Py_BuildValue("(%(informat)s)"%(inargs)s);
@@ -623,6 +646,7 @@ local %(retdecl)s %(cbfuncname)s(%(allargs)s)
 	{
 		log_py_exception(L_ERROR, "python error building args for "
 				"interface argument function");
+		GI_UNLOCK();
 		return %(defretval)s;
 	}
 	out = PyObject_Call(closobj, args, NULL);
@@ -632,6 +656,7 @@ local %(retdecl)s %(cbfuncname)s(%(allargs)s)
 	{
 		log_py_exception(L_ERROR, "python error calling "
 				"interface argument function");
+		GI_UNLOCK();
 		return %(defretval)s;
 	}
 """)
@@ -642,6 +667,7 @@ local %(retdecl)s %(cbfuncname)s(%(allargs)s)
 		Py_DECREF(out);
 		log_py_exception(L_ERROR, "python error unpacking results of "
 				"interface argument function");
+		GI_UNLOCK();
 		return %(defretval)s;
 	}
 """)
@@ -651,12 +677,14 @@ local %(retdecl)s %(cbfuncname)s(%(allargs)s)
 	{
 		Py_DECREF(out);
 		log_py_exception(L_ERROR, "interface argument function didn't return None as expected");
+		GI_UNLOCK();
 		return %(defretval)s;
 	}
 """)
 			cbcode.append("""
 %(extras3)s
 	Py_DECREF(out);
+	GI_UNLOCK();
 }
 """)
 			cbcode = ''.join(cbcode) % cbdict
@@ -763,6 +791,7 @@ def translate_pycb(name, ctype, line):
 	{
 		log_py_exception(L_ERROR, "python error building args for "
 			"callback %(name)s");
+		GI_UNLOCK();
 		return;
 	}
 """
@@ -774,13 +803,18 @@ def translate_pycb(name, ctype, line):
 	code.append("""
 local %(retdecl)s %(funcname)s(%(allargs)s)
 {
+	NEEDS_GIL;
+	GI_LOCK();
 	PyObject *args, *out;
 	LinkedList cbs = LL_INITIALIZER;
 	Link *l;
 %(decls)s
 	mm->LookupCallback(PYCBPREFIX %(name)s, %(arenaval)s, &cbs);
 	if (LLIsEmpty(&cbs))
+	{
+		GI_UNLOCK();
 		return;
+	}
 """)
 	if not outargs:
 		code.append(buildcode)
@@ -831,6 +865,7 @@ local %(retdecl)s %(funcname)s(%(allargs)s)
 		code.append(decref)
 	code.append("""
 	LLEmpty(&cbs);
+	GI_UNLOCK();
 }
 """)
 	code = ''.join(code) % cbvars
@@ -975,6 +1010,8 @@ local PyMemberDef %(memberdeclname)s[] = {
 """ % vars()
 		typestructname = 'pyint_%s_type' % iid
 		typedecl = """
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wmissing-field-initializers"
 local PyTypeObject %(typestructname)s = {
 	PyObject_HEAD_INIT(NULL)
 	0,                         /*ob_size*/
@@ -1008,6 +1045,7 @@ local PyTypeObject %(typestructname)s = {
 	%(memberdeclname)s,        /*tp_members*/
 	/* rest are null */
 };
+#pragma GCC diagnostic pop
 """ % vars()
 		doinit = """\
 	if (PyType_Ready(&%(typestructname)s) < 0) return;
@@ -1054,6 +1092,8 @@ local PyTypeObject %(typestructname)s = {
 			code.append("""
 local %(retdecl)s %(funcname)s(%(allargs)s)
 {
+	NEEDS_GIL;
+	GI_LOCK();
 	PyObject *args, *out;
 %(decls)s
 	args = Py_BuildValue("(%(informat)s)"%(inargs)s);
@@ -1061,6 +1101,7 @@ local %(retdecl)s %(funcname)s(%(allargs)s)
 	{
 		log_py_exception(L_ERROR, "python error building args for "
 				"function %(name)s in interface %(iid)s");
+		GI_UNLOCK();
 		return %(defretval)s;
 	}
 	out = call_gen_py_interface(PYINTPREFIX %(iid)s, "%(name)s", args, %(arenaval)s);
@@ -1068,6 +1109,7 @@ local %(retdecl)s %(funcname)s(%(allargs)s)
 	{
 		log_py_exception(L_ERROR, "python error calling "
 				"function %(name)s in interface %(iid)s");
+		GI_UNLOCK();
 		return %(defretval)s;
 	}
 """)
@@ -1078,6 +1120,7 @@ local %(retdecl)s %(funcname)s(%(allargs)s)
 		Py_DECREF(out);
 		log_py_exception(L_ERROR, "python error unpacking results of "
 				"function %(name)s in interface %(iid)s");
+		GI_UNLOCK();
 		return %(defretval)s;
 	}
 """)
@@ -1087,12 +1130,14 @@ local %(retdecl)s %(funcname)s(%(allargs)s)
 	{
 		Py_DECREF(out);
 		log_py_exception(L_ERROR, "interface func %(name)s didn't return None as expected");
+		GI_UNLOCK();
 		return %(defretval)s;
 	}
 """)
 			code.append("""
 %(extras3)s
 	Py_DECREF(out);
+	GI_UNLOCK();
 	return %(retorblank)s;
 }
 """)
@@ -1234,6 +1279,8 @@ local PyMemberDef %(memberdeclname)s[] = {
 """ % vars()
 		typestructname = 'pyadv_%s_type' % aid
 		typedecl = """
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wmissing-field-initializers"
 local PyTypeObject %(typestructname)s = {
 	PyObject_HEAD_INIT(NULL)
 	0,                         /*ob_size*/
@@ -1267,6 +1314,7 @@ local PyTypeObject %(typestructname)s = {
 	%(memberdeclname)s,        /*tp_members*/
 	/* rest are null */
 };
+#pragma GCC diagnostic pop
 """ % vars()
 		doinit = """\
 	if (PyType_Ready(&%(typestructname)s) < 0) return;
@@ -1313,13 +1361,16 @@ local PyTypeObject %(typestructname)s = {
 			code.append("""
 local %(retdecl)s %(funcname)s(%(allargs)s)
 {
+	NEEDS_GIL;
 	PyObject *args, *out;
+	GI_LOCK();
 %(decls)s
 	args = Py_BuildValue("(%(informat)s)"%(inargs)s);
 	if (!args)
 	{
 		log_py_exception(L_ERROR, "python error building args for "
 				"function %(name)s in adviser %(aid)s");
+		GI_UNLOCK();
 		return %(defretval)s;
 	}
 	out = call_gen_py_adviser(PYADVPREFIX %(aid)s, "%(name)s", args, %(arenaval)s);
@@ -1327,6 +1378,7 @@ local %(retdecl)s %(funcname)s(%(allargs)s)
 	{
 		log_py_exception(L_ERROR, "python error calling "
 				"function %(name)s in adviser %(aid)s");
+		GI_UNLOCK();
 		return %(defretval)s;
 	}
 """)
@@ -1337,6 +1389,7 @@ local %(retdecl)s %(funcname)s(%(allargs)s)
 		Py_DECREF(out);
 		log_py_exception(L_ERROR, "python error unpacking results of "
 				"function %(name)s in adviser %(aid)s");
+		GI_UNLOCK();
 		return %(defretval)s;
 	}
 """)
@@ -1346,12 +1399,14 @@ local %(retdecl)s %(funcname)s(%(allargs)s)
 	{
 		Py_DECREF(out);
 		log_py_exception(L_ERROR, "adviser func %(name)s didn't return None as expected");
+		GI_UNLOCK();
 		return %(defretval)s;
 	}
 """)
 			code.append("""
 %(extras3)s
 	Py_DECREF(out);
+	GI_UNLOCK();
 	return %(retorblank)s;
 }
 """)
@@ -1628,6 +1683,8 @@ local PyGetSetDef %(getsetters)s[] =
 	{NULL}
 };
 
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wmissing-field-initializers"
 local PyTypeObject %(typeobj)s =
 {
 	PyObject_HEAD_INIT(NULL)
@@ -1670,6 +1727,7 @@ local PyTypeObject %(typeobj)s =
 	0,                          /* tp_alloc */
 	0,                          /* tp_new */
 };
+#pragma GCC diagnostic push
 
 ATTR_UNUSED()
 local PyObject * cvt_c2p_%(name)s(void *p)
@@ -1856,7 +1914,7 @@ for l in lines:
 			const_interface(lastintdef)
 			translate_pyint(lastintdef, lasttypedef, intdirs)
 			intdirs = []
-			
+
 	# advisers
 	m = re_pyadv_advdef.match(l)
 	if m:
@@ -1877,7 +1935,7 @@ for l in lines:
 			const_adviser(lastadvdef)
 			translate_pyadv(lastadvdef, lastadvtypedef, advdirs)
 			advdirs = []
-	
+
 	# types
 	m = re_pytype.match(l)
 	if m:

@@ -4,6 +4,7 @@ conf
 data
 maps
 tmp
+src/contenc
 src/system.mk
 scrty
 scrty1

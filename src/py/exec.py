@@ -1,10 +1,46 @@
-
 # dist: public
 
 import sys, cStringIO, asss
 
+def try_interface(name):
+	try:
+		return asss.get_interface(name)
+	except:
+		return None
+
+def arenaToPlayerList(arena):
+	def each(player):
+		if player.arena == arena:
+			playerList.append(player)
+
+	playerList = asss.PlayerListType()
+	asss.for_each_player(each)
+	return playerList
+
 env = {}
+# `CB_SOMETHING` and `asss.CB_SOMETHING` are both correct
 env.update(asss.__dict__)
+env['asss'] = asss
+env['arenaman'] = try_interface(asss.I_ARENAMAN)
+env['balls'] = try_interface(asss.I_BALLS)
+env['bricks'] = try_interface(asss.I_BRICKS)
+env['brickwriter'] = try_interface(asss.I_BRICKWRITER)
+env['capman'] = try_interface(asss.I_CAPMAN)
+env['chat'] = try_interface(asss.I_CHAT)
+env['clientset'] = try_interface(asss.I_CLIENTSET)
+env['config'] = try_interface(asss.I_CONFIG)
+env['fake'] = try_interface(asss.I_FAKE)
+env['filetrans'] = try_interface(asss.I_FILETRANS)
+env['flagcore'] = try_interface(asss.I_FLAGCORE)
+env['game'] = try_interface(asss.I_GAME)
+env['jackpot'] = try_interface(asss.I_JACKPOT)
+env['logman'] = try_interface(asss.I_LOGMAN)
+env['mapdata'] = try_interface(asss.I_MAPDATA)
+env['objects'] = try_interface(asss.I_OBJECTS)
+env['playerdata'] = try_interface(asss.I_PLAYERDATA)
+env['redirect'] = try_interface(asss.I_REDIRECT)
+env['stats'] = try_interface(asss.I_STATS)
+env['arenaToPlayerList'] = arenaToPlayerList
 
 chat = asss.get_interface(asss.I_CHAT)
 orig_sys_stdout = sys.stdout
@@ -46,4 +82,3 @@ exceptions raised in your code.
 		chat.SendMessage(player, l)
 
 ref = asss.add_command('py', c_py)
-
