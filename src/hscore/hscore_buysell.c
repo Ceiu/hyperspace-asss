@@ -402,20 +402,6 @@ local void sellItem(Player *p, Item *item, int count, int ship)
 				{
 					int i;
 					Link *link;
-					database->lock();
-					for (link = LLGetHead(&item->itemTypeEntries); link; link = link->next)
-					{
-						ItemTypeEntry *entry = link->data;
-
-						if (items->getFreeItemTypeSpots(p, entry->itemType, ship) + (entry->delta * count) < 0) //have no free spots
-						{
-							chat->SendMessage(p, "You do not have enough free %s spots.", entry->itemType->name);
-							database->unlock();
-							return;
-						}
-					}
-					database->unlock();
-
 
 					LinkedList advisers = LL_INITIALIZER;
 					Ahscorebuysell *adviser;
