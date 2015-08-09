@@ -2,6 +2,8 @@
 #ifndef DOMINATION_H
 #define DOMINATION_H
 
+#define DOM_NEUTRAL_FREQ -1
+
 /**
  * Possible states for the domination game
  */

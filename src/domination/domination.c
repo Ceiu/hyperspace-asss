@@ -51,8 +51,6 @@
 #define DOM_MAX(x, y) ((x) > (y) ? (x) : (y))
 #define DOM_CLAMP(val, min, max) DOM_MIN(DOM_MAX((val), (min)), (max))
 
-#define DOM_NEUTRAL_FREQ -1
-
 
 
 struct DomArena {
@@ -108,6 +106,7 @@ struct DomRegion {
 
   int controlling_freq;
   u_int32_t controller_influence;
+  ticks_t last_influence_update;
 
   /* The name of the region */
   const char *cfg_region_name;
@@ -350,6 +349,30 @@ static int LoadRegionData(Arena *arena) {
     return 0;
   }
 
+  // If we've already loaded flag data, make sure we update flag-region linking
+  if (adata->flags_initialized) {
+    LinkedList *keys;
+    Link *link;
+    char *key;
+
+    keys = HashGetKeys(&adata->flags);
+    FOR_EACH(keys, key, link) {
+      DomFlag *dflag = HashGetOne(&adata->flags, key);
+
+      if (dflag) {
+        // Sanity check. This probably shouldn't ever happen...
+        if (dflag->regions_initialized) {
+          SetErrorState(arena, "ERROR: Flag regions initialized before regions are loaded.");
+          return 0;
+        }
+
+        if (MapFlagToRegions(dflag) < 1) {
+          FreeFlag(dflag);
+        }
+      }
+    }
+  }
+
   lm->LogA(L_INFO, DOM_MODULE_NAME, arena, "Loaded data for %d regions", adata->regions.ents);
 
   return 1;
@@ -474,20 +497,9 @@ static int LoadFlagData(Arena *arena) {
         dflag->cfg_flag_requisition = cfg->GetInt(arena->cfg, "Domination", cfg_key, 1);
 
         // Add regions containing this flag
-        HashInit(&dflag->regions);
-        dflag->regions_initialized = 1;
-
-        keys = HashGetKeys(&adata->regions);
-        FOR_EACH(keys, key, link) {
-          DomRegion *dregion = HashGetOne(&adata->regions, key);
-          if (dregion && mapdata->Contains(dregion->region, x, y)) {
-            HashReplace(&dflag->regions, key, dregion);
-          }
-        }
-
         // If we didn't have any regions, it's not a flag we'll track; we can free this DomFlag
         // and move on to the next one
-        if (dflag->regions.ents) {
+        if (MapFlagToRegions(dflag) > 0) {
           flagcore->SetFlags(arena, dflag->flag_id, &flag_info, 1);
           HashReplace(&adata->flags, ((char*) &dflag->flag_id), dflag);
         } else {
@@ -505,6 +517,27 @@ static int LoadFlagData(Arena *arena) {
   lm->LogA(L_INFO, DOM_MODULE_NAME, arena, "Loaded data for %d flags", adata->flags.ents);
 
   return 1;
+}
+
+static int MapFlagToRegions(DomFlag *dflag) {
+  DomArena *adata = P_ARENA_DATA(dflag->arena, adkey);
+
+  if (!dflag->regions_initialized) {
+    HashInit(&dflag->regions);
+    dflag->regions_initialized = 1;
+
+    keys = HashGetKeys(&adata->regions);
+    FOR_EACH(keys, key, link) {
+      DomRegion *dregion = HashGetOne(&adata->regions, key);
+      if (dregion && mapdata->Contains(dregion->region, x, y)) {
+        HashReplace(&dflag->regions, key, dregion);
+      }
+    }
+
+    return dflag->regions.ents;
+  }
+
+  return -1;
 }
 
 static void FreeFlag(DomFlag *dflag) {
@@ -738,6 +771,11 @@ static int ReadArenaConfig(Arena *arena) {
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
 static DomFlag* GetDomFlag(Arena *arena, int flag_id) {
+  if (!arena) {
+    lm->Log(L_ERROR, "<%s> ERROR: GetDomFlag called with a null arena parameter", DOM_MODULE_NAME);
+    return NULL;
+  }
+
   DomArena *adata = P_ARENA_DATA(arena, adkey);
   DomFlag *dflag = NULL;
 
@@ -749,6 +787,11 @@ static DomFlag* GetDomFlag(Arena *arena, int flag_id) {
 }
 
 static DomTeam* GetDomTeam(Arena *arena, int freq) {
+  if (!arena) {
+    lm->Log(L_ERROR, "<%s> ERROR: GetDomTeam called with a null arena parameter", DOM_MODULE_NAME);
+    return NULL;
+  }
+
   DomArena *adata = P_ARENA_DATA(arena, adkey);
   DomTeam *dteam = NULL;
 
@@ -760,6 +803,16 @@ static DomTeam* GetDomTeam(Arena *arena, int freq) {
 }
 
 static DomRegion* GetDomRegion(Arena *arena, const char *region_name) {
+  if (!arena) {
+    lm->Log(L_ERROR, "<%s> ERROR: GetDomRegion called with a null arena parameter", DOM_MODULE_NAME);
+    return NULL;
+  }
+
+  if (!region_name) {
+    lm->Log(L_ERROR, "<%s> ERROR: GetDomRegion called with a null region_name parameter", DOM_MODULE_NAME);
+    return NULL;
+  }
+
   DomArena *adata = P_ARENA_DATA(arena, adkey);
   DomRegion *dregion = NULL;
 
@@ -771,13 +824,18 @@ static DomRegion* GetDomRegion(Arena *arena, const char *region_name) {
 }
 
 static int GetFlagProvidedRequisition(DomFlag *dflag) {
-  return dflag ? dflag->cfg_flag_requisition : 0;
+  if (!dflag) {
+    lm->Log(L_ERROR, "<%s> ERROR: GetFlagProvidedRequisition called with a null dflag parameter", DOM_MODULE_NAME);
+    return -1;
+  }
+
+  return dflag->cfg_flag_requisition;
 }
 
 static int GetFlagRequiredInfluence(DomFlag *dflag) {
   if (!dflag) {
     lm->Log(L_ERROR, "<%s> ERROR: GetFlagRequiredInfluence called with a null dflag parameter", DOM_MODULE_NAME);
-    return;
+    return -1;
   }
 
   // Convert seconds to milliseconds and treat millis as influence.
@@ -786,13 +844,28 @@ static int GetFlagRequiredInfluence(DomFlag *dflag) {
 }
 
 static int GetFlagAcquiredInfluence(DomFlag *dflag, DomTeam *dteam) {
+  if (!dflag) {
+    lm->Log(L_ERROR, "<%s> ERROR: GetFlagAcquiredInfluence called with a null dflag parameter", DOM_MODULE_NAME);
+    return -1;
+  }
+
+  if (!dteam) {
+    lm->Log(L_ERROR, "<%s> ERROR: GetFlagAcquiredInfluence called with a null dteam parameter", DOM_MODULE_NAME);
+    return -1;
+  }
+
   UpdateFlagAcquiredInfluence(dflag);
 
   return dflag->controlling_freq == dteam->cfg_team_freq ? dflag->controller_influence : 0;
 }
 
 static DomTeam* GetFlagControllingTeam(DomFlag *dflag) {
-  return dflag ? dflag->controlling_freq : DOM_NEUTRAL_FREQ;
+  if (!dflag) {
+    lm->Log(L_ERROR, "<%s> ERROR: GetFlagControllingTeam called with a null dflag parameter", DOM_MODULE_NAME);
+    return NULL;
+  }
+
+  return GetDomTeam(dflag->arena, dflag->controlling_freq);
 }
 
 /**
@@ -872,6 +945,7 @@ static void SetFlagState(DomFlag *dflag, DomFlagState state, DomTeam *controller
 
   FlagInfo info = { FI_ONMAP, NULL, -1, -1, dflag->flag_freq };
   flagcore->SetFlags(dflag->arena, dflag->flag_id, &info, 1);
+  UpdateFlagState(dflag->arena);
 
   if (change) {
     dflag->last_influence_update = current_millis();
@@ -881,26 +955,66 @@ static void SetFlagState(DomFlag *dflag, DomFlagState state, DomTeam *controller
 }
 
 static int GetRegionRequisition(DomRegion *dregion, DomTeam *dteam) {
+  if (!dregion) {
+    lm->Log(L_ERROR, "<%s> ERROR: GetRegionRequisition called with a null dregion parameter", DOM_MODULE_NAME);
+    return -1;
+  }
+
+  if (!dteam) {
+    lm->Log(L_ERROR, "<%s> ERROR: GetRegionRequisition called with a null dteam parameter", DOM_MODULE_NAME);
+    return -1;
+  }
 
 }
 
 static int GetRegionProvidedControlPoints(DomRegion *dregion) {
+  if (!dregion) {
+    lm->Log(L_ERROR, "<%s> ERROR: GetRegionProvidedControlPoints called with a null dregion parameter", DOM_MODULE_NAME);
+    return -1;
+  }
 
 }
 
-static int GetRegionRequiredInfluence(DomRegion *flag) {
+static int GetRegionRequiredInfluence(DomRegion *dregion) {
+  if (!dregion) {
+    lm->Log(L_ERROR, "<%s> ERROR: GetRegionRequiredInfluence called with a null dregion parameter", DOM_MODULE_NAME);
+    return -1;
+  }
 
+  return dregion->cfg_required_influence;
 }
 
 static int GetRegionAcquiredInfluence(DomRegion *dregion, DomTeam *dteam) {
+  if (!dregion) {
+    lm->Log(L_ERROR, "<%s> ERROR: GetRegionAcquiredInfluence called with a null dregion parameter", DOM_MODULE_NAME);
+    return -1;
+  }
+
+  if (!dteam) {
+    lm->Log(L_ERROR, "<%s> ERROR: GetRegionAcquiredInfluence called with a null dteam parameter", DOM_MODULE_NAME);
+    return -1;
+  }
+
   UpdateRegionAcquiredInfluence(dregion);
+
+  return dregion->controlling_freq == dteam->cfg_team_freq ? dregion->controller_influence : 0;
 }
 
 static DomTeam* getRegionControllingTeam(DomRegion *dregion) {
+  if (!dregion) {
+    lm->Log(L_ERROR, "<%s> ERROR: getRegionControllingTeam called with a null dregion parameter", DOM_MODULE_NAME);
+    return DOM_NEUTRAL_FREQ;
+  }
 
+  return dregion->controlling_freq;
 }
 
 static void SetRegionState(DomRegion *dregion, DomRegionState state, DomTeam *dteam, int influence) {
+  if (!dregion) {
+    lm->Log(L_ERROR, "<%s> ERROR: SetRegionState called with a null dregion parameter", DOM_MODULE_NAME);
+    return;
+  }
+
   UpdateRegionAcquiredInfluence(dregion);
 }
 
@@ -943,7 +1057,42 @@ static void UpdateFlagAcquiredInfluence(DomFlag *dflag) {
 }
 
 static void UpdateRegionAcquiredInfluence(DomRegion *dregion) {
+  if (dregion->last_influence_update) {
+    ticks_t ctime = current_millis();
+    ticks_t elapsed = ctime - dregion->last_influence_update;
 
+    // Things we need:
+    // Freq with most req
+    // Req per freq
+
+    switch (dregion->state) {
+      case DOM_REGION_STATE_CAPTURING:
+        if (dflag->controlling_freq == dflag->flag_freq) {
+          chat->SendArenaMessage(dflag->arena, "UPDATING FLAG INFLUENCE -- Flag owned by controller; adding %d influence", elapsed);
+          // Add influence up to required influence
+          dflag->controller_influence += elapsed;
+
+          if (dflag->controller_influence > required_influence) {
+            dflag->controller_influence = required_influence;
+          }
+
+        } else {
+          chat->SendArenaMessage(dflag->arena, "UPDATING FLAG INFLUENCE -- Flag owned by enemy; subtracting %d influence", elapsed);
+          // Subtract influence down to zero
+          dflag->controller_influence -= elapsed;
+
+          if (dflag->controller_influence < 0) {
+            dflag->controller_influence = 0;
+          }
+        }
+
+        chat->SendArenaMessage(dflag->arena, "UPDATED FLAG INFLUENCE: flag %d, inf: %d", dflag->flag_id, dflag->controller_influence);
+
+      default:
+        // Influence does not accumulate in these states. Just update the timer.
+        dflag->last_influence_update = ctime;
+    }
+  }
 }
 
 static void ClearFlagTimers(DomFlag *dflag) {
@@ -956,8 +1105,34 @@ static void ClearRegionTimers(DomRegion *dregion) {
 }
 
 static void ClearGameTimers(Arena *arena) {
-  mainloop->ClearTimer(OnFlagContestTimer, NULL);
-  mainloop->ClearTimer(OnFlagCaptureTimer, NULL);
+  DomArena *adata = P_ARENA_DATA(arena, adkey);
+
+  LinkedList *keys;
+  Link *link;
+  char *key;
+
+  if (adata->flags_initialized) {
+    keys = HashGetKeys(&adata->flags);
+    FOR_EACH(keys, key, link) {
+      DomFlag *dflag = HashGetOne(&adata->flags, key);
+      if (dflag) {
+        mainloop->ClearTimer(OnFlagContestTimer, dflag);
+        mainloop->ClearTimer(OnFlagCaptureTimer, dflag);
+      }
+    }
+  }
+
+  if (adata->regions_initialized) {
+    keys = HashGetKeys(&adata->regions);
+    FOR_EACH(keys, key, link) {
+      DomRegion *dregion = HashGetOne(&adata->regions, key);
+      if (dregion) {
+        // Clear region timers
+      }
+    }
+  }
+
+  // Clear region timers
 }
 
 static void UpdateFlagStateTimer(void *param) {
