@@ -394,8 +394,8 @@ local void flagWinCallback(Arena *arena, int freq, int *pts)
 			if(i->arena == arena && i->p_ship != SHIP_SPEC)
 			{
 				if (i->p_freq == freq) {
-					int exp_reward = adata->max_flag_exp;
-					int hsd_reward = adata->max_flag_money;
+					float exp_reward = adata->max_flag_exp;
+					float hsd_reward = adata->max_flag_money;
 
 					int pmul_exp = items->getPropertySum(i, i->p_ship, "exp_multiplier", 100);
 					float exp_mul = ((float) pmul_exp / 100.0);
@@ -406,11 +406,11 @@ local void flagWinCallback(Arena *arena, int freq, int *pts)
 					hsd_reward *= hsd_mul;
 
 					//no need to send message, as the team announcement works just fine
-					database->addMoney(i, MONEY_TYPE_FLAG, hsd_reward);
-					database->addExp(i, exp_reward);
+					database->addMoney(i, MONEY_TYPE_FLAG, (int) roundf(hsd_reward));
+					database->addExp(i, (int) roundf(exp_reward));
 				} else if (i->p_freq >= priv_freq_start && i->p_freq < max_freq) {
-					int exp_reward = adata->max_loss_exp;
-					int hsd_reward = adata->max_loss_money;
+					float exp_reward = adata->max_loss_exp;
+					float hsd_reward = adata->max_loss_money;
 
 					int pmul_exp = items->getPropertySum(i, i->p_ship, "exp_multiplier", 100);
 					float exp_mul = ((float) pmul_exp / 100.0);
@@ -420,8 +420,8 @@ local void flagWinCallback(Arena *arena, int freq, int *pts)
 					exp_reward *= exp_mul;
 					hsd_reward *= hsd_mul;
 
-					database->addMoney(i, MONEY_TYPE_FLAG, hsd_reward);
-					database->addExp(i, exp_reward);
+					database->addMoney(i, MONEY_TYPE_FLAG, (int) roundf(hsd_reward));
+					database->addExp(i, (int) roundf(exp_reward));
 
 					if (exp_reward && hsd_reward) {
 						chat->SendMessage(i, "You received $%d and %d exp for a flag loss.", hsd_reward, exp_reward);
@@ -444,7 +444,7 @@ local void flagWinCallback(Arena *arena, int freq, int *pts)
 local int calculateKillExpReward(Arena *arena, Player *killer, Player *killed, int bounty, int bonus)
 {
 	AData *adata = P_ARENA_DATA(arena, adkey);
-	int exp = 0;
+	float exp = 0;
 	HashTable *vars = HashAlloc();
 	char error_buf[200];
 
@@ -500,13 +500,13 @@ local int calculateKillExpReward(Arena *arena, Player *killer, Player *killed, i
 
 	exp *= multiplier;
 
-	return exp;
+	return (int) roundf(exp);
 }
 
 local int calculateKillMoneyReward(Arena *arena, Player *killer, Player *killed, int bounty, int bonus)
 {
 	AData *adata = P_ARENA_DATA(arena, adkey);
-	int money = 0;
+	float money = 0;
 	HashTable *vars = HashAlloc();
 	char error_buf[200];
 
@@ -562,7 +562,7 @@ local int calculateKillMoneyReward(Arena *arena, Player *killer, Player *killed,
 
 	money *= multiplier;
 
-	return money;
+	return (int) roundf(money);
 }
 
 local void killCallback(Arena *arena, Player *killer, Player *killed, int bounty, int flags, int *pts, int *green)
