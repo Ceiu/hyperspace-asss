@@ -77,6 +77,7 @@ local Imapdata *mapdata;
 local Imainloop *ml;
 local Iflagcore *flagcore;
 local Ihscoredatabase *database;
+local Ihscoreitems *items;
 
 local int pdkey;
 local int adkey;
@@ -378,13 +379,13 @@ local void flagWinCallback(Arena *arena, int freq, int *pts)
 		}
 		else
 		{
-			chat->SendArenaMessage(arena, "Reward: $%d (%d exp)", adata->max_flag_money, adata->max_flag_exp);
+			chat->SendArenaMessage(arena, "Base reward: $%d (%d exp)", adata->max_flag_money, adata->max_flag_exp);
 		}
 
 		// Impl note:
 		// More hackery to make sure only players on the flag teams get rewarded.
 		int priv_freq_start = cfg->GetInt(arena->cfg, "Team", "PrivFreqStart", 100);
-	  int max_freq = cfg->GetInt(arena->cfg, "Team", "MaxFrequency", (priv_freq_start + 2));
+		int max_freq = cfg->GetInt(arena->cfg, "Team", "MaxFrequency", (priv_freq_start + 2));
 
 		 //Distribute Wealth
 		pd->Lock();
@@ -393,21 +394,43 @@ local void flagWinCallback(Arena *arena, int freq, int *pts)
 			if(i->arena == arena && i->p_ship != SHIP_SPEC)
 			{
 				if (i->p_freq == freq) {
+					int exp_reward = adata->max_flag_exp;
+					int hsd_reward = adata->max_flag_money;
+
+					int pmul_exp = items->getPropertySum(i, i->p_ship, "exp_multiplier", 100);
+					float exp_mul = ((float) pmul_exp / 100.0);
+					int pmul_hsd = items->getPropertySum(i, i->p_ship, "hsd_multiplier", 100);
+					float hsd_mul = ((float) pmul_hsd / 100.0);
+
+					exp_reward *= exp_mul;
+					hsd_reward *= hsd_mul;
+
 					//no need to send message, as the team announcement works just fine
-					database->addMoney(i, MONEY_TYPE_FLAG, adata->max_flag_money);
-					database->addExp(i, adata->max_flag_exp);
+					database->addMoney(i, MONEY_TYPE_FLAG, hsd_reward);
+					database->addExp(i, exp_reward);
 				} else if (i->p_freq >= priv_freq_start && i->p_freq < max_freq) {
-					database->addMoney(i, MONEY_TYPE_FLAG, adata->max_loss_money);
-					database->addExp(i, adata->max_loss_exp);
+					int exp_reward = adata->max_loss_exp;
+					int hsd_reward = adata->max_loss_money;
 
-					if (adata->max_loss_exp && adata->max_loss_money) {
-						chat->SendMessage(i, "You received $%d and %d exp for a flag loss.", adata->max_loss_money, adata->max_loss_exp);
+					int pmul_exp = items->getPropertySum(i, i->p_ship, "exp_multiplier", 100);
+					float exp_mul = ((float) pmul_exp / 100.0);
+					int pmul_hsd = items->getPropertySum(i, i->p_ship, "hsd_multiplier", 100);
+					float hsd_mul = ((float) pmul_hsd / 100.0);
 
-					} else if (adata->max_loss_exp) {
-						chat->SendMessage(i, "You received %d exp for a flag loss.", adata->max_loss_exp);
+					exp_reward *= exp_mul;
+					hsd_reward *= hsd_mul;
 
-					} else if (adata->max_loss_money) {
-						chat->SendMessage(i, "You received $%d for a flag loss.", adata->max_loss_money);
+					database->addMoney(i, MONEY_TYPE_FLAG, hsd_reward);
+					database->addExp(i, exp_reward);
+
+					if (exp_reward && hsd_reward) {
+						chat->SendMessage(i, "You received $%d and %d exp for a flag loss.", hsd_reward, exp_reward);
+
+					} else if (exp_reward) {
+						chat->SendMessage(i, "You received %d exp for a flag loss.", exp_reward);
+
+					} else if (hsd_reward) {
+						chat->SendMessage(i, "You received $%d for a flag loss.", hsd_reward);
 					}
 				}
 			}
@@ -472,6 +495,11 @@ local int calculateKillExpReward(Arena *arena, Player *killer, Player *killed, i
 
 	HashFree(vars);
 
+	int pmul = items->getPropertySum(killer, killer->p_ship, "exp_multiplier", 100);
+	float multiplier = ((float) pmul / 100.0);
+
+	exp *= multiplier;
+
 	return exp;
 }
 
@@ -528,6 +556,11 @@ local int calculateKillMoneyReward(Arena *arena, Player *killer, Player *killed,
 	}
 
 	HashFree(vars);
+
+	int pmul = items->getPropertySum(killer, killer->p_ship, "hsd_multiplier", 100);
+	float multiplier = ((float) pmul / 100.0);
+
+	money *= multiplier;
 
 	return money;
 }
@@ -801,6 +834,14 @@ local int getPeriodicPoints(Arena *arena, int freq, int freqplayers, int totalpl
 					p_money = money;
 					p_exp = exp;
 				}
+
+				int pmul_exp = items->getPropertySum(p, p->p_ship, "exp_multiplier", 100);
+				float exp_mul = ((float) pmul_exp / 100.0);
+				int pmul_hsd = items->getPropertySum(p, p->p_ship, "hsd_multiplier", 100);
+				float hsd_mul = ((float) pmul_hsd / 100.0);
+
+				p_exp *= exp_mul;
+				p_money *= hsd_mul;
 
 				database->addMoney(p, MONEY_TYPE_FLAG, p_money);
 				database->addExp(p, p_exp);
@@ -1117,7 +1158,7 @@ local Appk myadv =
 	NULL, edit_ppk_bounty
 };
 
-EXPORT const char info_hscore_rewards[] = "v1.5 D1st0rt & Dr Brain";
+EXPORT const char info_hscore_rewards[] = "v1.6 D1st0rt, Dr Brain & Ceiu";
 
 EXPORT int MM_hscore_rewards(int action, Imodman *_mm, Arena *arena)
 {
@@ -1137,6 +1178,7 @@ EXPORT int MM_hscore_rewards(int action, Imodman *_mm, Arena *arena)
 		ml = mm->GetInterface(I_MAINLOOP, ALLARENAS);
 		flagcore = mm->GetInterface(I_FLAGCORE, ALLARENAS);
 		database = mm->GetInterface(I_HSCORE_DATABASE, ALLARENAS);
+		items = mm->GetInterface(I_HSCORE_ITEMS, ALLARENAS);
 
 		if (!lm || !chat || !cfg || !pd || !cmd || !persist || !formula || !aman || !mapdata || !ml || !flagcore || !database)
 		{
@@ -1152,6 +1194,7 @@ EXPORT int MM_hscore_rewards(int action, Imodman *_mm, Arena *arena)
 			mm->ReleaseInterface(ml);
 			mm->ReleaseInterface(flagcore);
 			mm->ReleaseInterface(database);
+			mm->ReleaseInterface(items);
 
 			return MM_FAIL;
 		}
@@ -1202,6 +1245,7 @@ EXPORT int MM_hscore_rewards(int action, Imodman *_mm, Arena *arena)
 		mm->ReleaseInterface(ml);
 		mm->ReleaseInterface(flagcore);
 		mm->ReleaseInterface(database);
+		mm->ReleaseInterface(items);
 
 		return MM_OK;
 	}
