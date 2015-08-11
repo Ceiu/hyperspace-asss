@@ -632,7 +632,7 @@ local shipmask_t GetAllowableShips(Player *p, int freq, char *err_buf, int buf_l
 	return 0;
 }
 
-local int CanChangeFreq(Player *p, int new_freq, char *err_buf, int buf_len)
+local int CanChangeFreq(Player *p, int new_freq, int is_changing, char *err_buf, int buf_len)
 {
 	if (err_buf)
 		snprintf(err_buf, buf_len, "Teams are locked for playback.");
