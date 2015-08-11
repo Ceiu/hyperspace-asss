@@ -1,5 +1,5 @@
 
-funky_mods = brickwriter autowarp autoturret record sgcompat $(EXTRA_FUNKY_MODS)
+funky_mods = brickwriter autowarp autoturret record sgcompat auth_vie mark voices
 funky_libs = $(ZLIB_LIB) -lm
 
 $(eval $(call dl_template,funky))
