@@ -32,6 +32,7 @@
 #define L_MALICIOUS  'M'  /**< bad stuff from the client side */
 #define L_WARN       'W'  /**< something bad, but not too bad */
 #define L_ERROR      'E'  /**< something really really bad */
+#define L_CRITICAL   'C'  /**< not an error, but equally important */
 
 /** or this in with another log level to force the message to be logged
  ** synchronously.
