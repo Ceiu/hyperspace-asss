@@ -25,6 +25,24 @@
  *  - The game ends with a team controls all regions for a duration or when the game time runs out.
  *    The team with the most region control points wins.
  *
+ *
+ * Notes:
+ *  - The term "influence" is incredibly overloaded in this module, which may make following various
+ *    states difficult. Influence is a stat which is both provided and accumulated by flags, and
+ *    accumulated by regions. For instance, a flag requires acquiring influence to control. Once
+ *    controlled, the flag provides influence toward a region. The flag's provided influence helps
+ *    a team control a region.
+ *    - Influence on a flag represents how "controlled" it is. When acquired influence > required
+ *      influence, the flag flips to the controlled state.
+ *    - Controlled flags provide influence on a per-tick basis to their region for the controlling
+ *      team. Once the team's acquired region influence > required region influence, the region
+ *      flips to the controlled state
+ *
+ *  - This really comes up when trying to examine a team's region influence (per tick) vs their
+ *    acquired influence (total). When calling interface methods to examine these values, be sure
+ *    to note the usage of terms like "acquired" and "region influence" vs simply "influence."
+ *
+ *
  * @author Chris "Ceiu" Rog <ceiu@cericlabs.com>
  */
 #include <stdarg.h>
@@ -57,13 +75,13 @@ struct DomArena {
   Arena *arena;
 
   HashTable teams;
-  short teams_initialized;
+  char teams_initialized;
 
   HashTable regions;
-  short regions_initialized;
+  char regions_initialized;
 
   HashTable flags;
-  short flags_initialized;
+  char flags_initialized;
 
   DomGameState game_state;
   u_int32_t game_time_remaining;
@@ -102,10 +120,10 @@ struct DomRegion {
   DomRegionState state;
 
   HashTable flags;
-  short flags_initialized;
+  char flags_initialized;
 
-  int controlling_freq;
-  u_int32_t controller_influence;
+  DomTeam *controlling_team;
+  u_int32_t acquired_influence;
   ticks_t last_influence_update;
 
   /* The name of the region */
@@ -126,18 +144,18 @@ struct DomFlag {
   DomFlagState state;
 
   HashTable regions;
-  short regions_initialized;
+  char regions_initialized;
 
   /* Controlling freq and their current influence */
-  int controlling_freq;
-  u_int32_t controller_influence;
+  DomTeam *controlling_team;
+  u_int32_t acquired_influence;
   ticks_t last_influence_update;
 
   /* The freq that controls the physical flag; used for state management */
-  int flag_freq;
+  DomTeam *flag_team;
 
-  /* Amount of requisition provided by this flag */
-  u_int32_t cfg_flag_requisition;
+  /* Amount of influence provided by this flag */
+  u_int32_t cfg_flag_influence;
 };
 
 struct DomPlayer {
@@ -176,6 +194,7 @@ static void FreeRegion(DomRegion *dregion);
 static void FreeRegionData(Arena *arena);
 static DomFlag* AllocFlag(Arena *arena);
 static int LoadFlagData(Arena *arena);
+static int MapFlagToRegions(DomFlag *dflag);
 static void FreeFlag(DomFlag *dflag);
 static void FreeFlagData(Arena *arena);
 static DomTeam* AllocTeam(Arena *arena);
@@ -186,16 +205,16 @@ static int ReadArenaConfig(Arena *arena);
 static DomFlag* GetDomFlag(Arena *arena, int flag_id);
 static DomTeam* GetDomTeam(Arena *arena, int freq);
 static DomRegion* GetDomRegion(Arena *arena, const char *region_name);
-static int GetFlagProvidedRequisition(DomFlag *dflag);
+static int GetFlagProvidedInfluence(DomFlag *dflag);
 static int GetFlagRequiredInfluence(DomFlag *dflag);
 static int GetFlagAcquiredInfluence(DomFlag *dflag, DomTeam *dteam);
 static DomTeam* GetFlagControllingTeam(DomFlag *dflag);
 static void SetFlagState(DomFlag *dflag, DomFlagState state, DomTeam *controller, int influence, DomTeam *contesting);
-static int GetRegionRequisition(DomRegion *dregion, DomTeam *dteam);
 static int GetRegionProvidedControlPoints(DomRegion *dregion);
 static int GetRegionRequiredInfluence(DomRegion *flag);
-static int GetRegionAcquiredInfluence(DomRegion *dregion, DomTeam *dteam);
-static DomTeam* getRegionControllingTeam(DomRegion *dregion);
+static int GetTeamRegionInfluence(DomTeam *dteam, DomRegion *dregion);
+static int GetTeamAcquiredRegionInfluence(DomTeam *dteam, DomRegion *dregion);
+static DomTeam* GetRegionControllingTeam(DomRegion *dregion);
 static void SetRegionState(DomRegion *dregion, DomRegionState state, DomTeam *dteam, int influence);
 static void UpdateFlagAcquiredInfluence(DomFlag *dflag);
 static void UpdateRegionAcquiredInfluence(DomRegion *dregion);
@@ -288,8 +307,8 @@ static DomRegion* AllocRegion(Arena *arena) {
     dregion->cfg_region_value = 0;
     dregion->cfg_required_influence = 0;
 
-    dregion->controlling_freq = DOM_NEUTRAL_FREQ;
-    dregion->controller_influence = 0;
+    dregion->controlling_team = NULL;
+    dregion->acquired_influence = 0;
   } else {
     SetErrorState(arena, "ERROR: Unable to allocate memory for a new DomRegion instance");
   }
@@ -437,13 +456,13 @@ static DomFlag* AllocFlag(Arena *arena) {
 
     dflag->regions_initialized = 0;
 
-    dflag->controlling_freq = DOM_NEUTRAL_FREQ;
-    dflag->controller_influence = 0;
+    dflag->controlling_team = NULL;
+    dflag->acquired_influence = 0;
     dflag->last_influence_update = 0;
 
-    dflag->flag_freq = DOM_NEUTRAL_FREQ;
+    dflag->flag_team = NULL;
 
-    dflag->cfg_flag_requisition = 0;
+    dflag->cfg_flag_influence = 0;
   } else {
     SetErrorState(arena, "ERROR: Unable to allocate memory for a new DomFlag instance");
   }
@@ -454,10 +473,6 @@ static DomFlag* AllocFlag(Arena *arena) {
 static int LoadFlagData(Arena *arena) {
   DomArena *adata = P_ARENA_DATA(arena, adkey);
   DomFlag *dflag;
-
-  LinkedList *keys;
-  Link *link;
-  char *key;
 
   if (!adata->regions_initialized) {
     if (!LoadRegionData(arena)) {
@@ -491,10 +506,10 @@ static int LoadFlagData(Arena *arena) {
           return 0;
         }
 
-        /* cfghelp: Domination:Flag1-Requisition, arena, int,
-         * The amount of requisition this flag is worth. */
-        sprintf(cfg_key, "Flag%d-%s", (dflag->flag_id + 1), "Requisition");
-        dflag->cfg_flag_requisition = cfg->GetInt(arena->cfg, "Domination", cfg_key, 1);
+        /* cfghelp: Domination:Flag1-Influence, arena, int,
+         * The amount of influence this flag is worth. */
+        sprintf(cfg_key, "Flag%d-%s", (dflag->flag_id + 1), "Influence");
+        dflag->cfg_flag_influence = cfg->GetInt(arena->cfg, "Domination", cfg_key, 1);
 
         // Add regions containing this flag
         // If we didn't have any regions, it's not a flag we'll track; we can free this DomFlag
@@ -522,6 +537,10 @@ static int LoadFlagData(Arena *arena) {
 static int MapFlagToRegions(DomFlag *dflag) {
   DomArena *adata = P_ARENA_DATA(dflag->arena, adkey);
 
+  LinkedList *keys;
+  Link *link;
+  char *key;
+
   if (!dflag->regions_initialized) {
     HashInit(&dflag->regions);
     dflag->regions_initialized = 1;
@@ -529,7 +548,7 @@ static int MapFlagToRegions(DomFlag *dflag) {
     keys = HashGetKeys(&adata->regions);
     FOR_EACH(keys, key, link) {
       DomRegion *dregion = HashGetOne(&adata->regions, key);
-      if (dregion && mapdata->Contains(dregion->region, x, y)) {
+      if (dregion && mapdata->Contains(dregion->region, dflag->x, dflag->y)) {
         HashReplace(&dflag->regions, key, dregion);
       }
     }
@@ -594,10 +613,6 @@ static int LoadTeamData(Arena *arena) {
   DomArena *adata = P_ARENA_DATA(arena, adkey);
   DomTeam *dteam;
 
-  LinkedList *keys;
-  Link *link;
-  char *key;
-
   int team_id = 0;
   char cfg_key[255];
 
@@ -645,9 +660,9 @@ static void FreeTeam(DomTeam *dteam) {
     dteam->players_initialized = 0;
   }
 
-  if (dteam->team_name) {
-    free(dteam->team_name);
-  }
+  // if (dteam->team_name) {
+  //   free(dteam->team_name);
+  // }
 
   free(dteam);
 }
@@ -662,7 +677,7 @@ static void FreeTeamData(Arena *arena) {
   if (adata->teams_initialized) {
     keys = HashGetKeys(&adata->teams);
     FOR_EACH(keys, key, link) {
-      DomFlag *dteam = HashGetOne(&adata->teams, key);
+      DomTeam *dteam = HashGetOne(&adata->teams, key);
       if (dteam) {
         FreeTeam(dteam);
       }
@@ -823,13 +838,13 @@ static DomRegion* GetDomRegion(Arena *arena, const char *region_name) {
   return dregion;
 }
 
-static int GetFlagProvidedRequisition(DomFlag *dflag) {
+static int GetFlagProvidedInfluence(DomFlag *dflag) {
   if (!dflag) {
-    lm->Log(L_ERROR, "<%s> ERROR: GetFlagProvidedRequisition called with a null dflag parameter", DOM_MODULE_NAME);
+    lm->Log(L_ERROR, "<%s> ERROR: GetFlagProvidedInfluence called with a null dflag parameter", DOM_MODULE_NAME);
     return -1;
   }
 
-  return dflag->cfg_flag_requisition;
+  return dflag->cfg_flag_influence;
 }
 
 static int GetFlagRequiredInfluence(DomFlag *dflag) {
@@ -856,7 +871,7 @@ static int GetFlagAcquiredInfluence(DomFlag *dflag, DomTeam *dteam) {
 
   UpdateFlagAcquiredInfluence(dflag);
 
-  return dflag->controlling_freq == dteam->cfg_team_freq ? dflag->controller_influence : 0;
+  return dflag->controlling_team == dteam ? dflag->acquired_influence : 0;
 }
 
 static DomTeam* GetFlagControllingTeam(DomFlag *dflag) {
@@ -865,7 +880,7 @@ static DomTeam* GetFlagControllingTeam(DomFlag *dflag) {
     return NULL;
   }
 
-  return GetDomTeam(dflag->arena, dflag->controlling_freq);
+  return dflag->controlling_team;
 }
 
 /**
@@ -877,18 +892,18 @@ static DomTeam* GetFlagControllingTeam(DomFlag *dflag) {
  * @param state
  *  The base state to assign to the flag
  *
- * @param *controller
+ * @param *controlling_team
  *  The DomTeam that controls the logical flag
  *  Note: This is not the controller of the actual in-game turf flag entity
  *
  * @param influence
  *  The amount of influence the controlling team has over the flag
  *
- * @param *flag_entity_controller
+ * @param *flag_entity_controlling_team
  *  The DomTeam that controls the physical turf flag entity
  *  Note: The flag entity controller is not the actual logical domination controller
  */
-static void SetFlagState(DomFlag *dflag, DomFlagState state, DomTeam *controller, int influence, DomTeam *flag_entity_controller) {
+static void SetFlagState(DomFlag *dflag, DomFlagState state, DomTeam *controlling_team, int influence, DomTeam *flag_entity_controlling_team) {
   if (!dflag) {
     lm->Log(L_ERROR, "<%s> ERROR: SetFlagState called with a null dflag parameter", DOM_MODULE_NAME);
     return;
@@ -897,32 +912,32 @@ static void SetFlagState(DomFlag *dflag, DomFlagState state, DomTeam *controller
   // Some sanity checks...
   switch (state) {
     case DOM_FLAG_STATE_NEUTRAL:
-      controller = NULL;
-      flag_entity_controller = NULL;
+      controlling_team = NULL;
+      flag_entity_controlling_team = NULL;
       influence = 0;
       break;
 
     case DOM_FLAG_STATE_CONTESTED:
-      if (!flag_entity_controller) {
+      if (!flag_entity_controlling_team) {
         lm->Log(L_ERROR, "<%s> ERROR: SetFlagState called with a CONTESTED state and no flag entity controller", DOM_MODULE_NAME);
         return;
       }
       break;
 
     case DOM_FLAG_STATE_CAPTURING:
-      if (!flag_entity_controller) {
+      if (!flag_entity_controlling_team) {
         lm->Log(L_ERROR, "<%s> ERROR: SetFlagState called with a CAPTURING state and no flag entity controller", DOM_MODULE_NAME);
         return;
       }
       break;
 
     case DOM_FLAG_STATE_CONTROLLED:
-      if (!controller) {
-        lm->Log(L_ERROR, "<%s> ERROR: SetFlagState called with a CONTROLLED state and no controller", DOM_MODULE_NAME);
+      if (!controlling_team) {
+        lm->Log(L_ERROR, "<%s> ERROR: SetFlagState called with a CONTROLLED state and no controlling team", DOM_MODULE_NAME);
         return;
       }
 
-      flag_entity_controller = controller;
+      flag_entity_controlling_team = controlling_team;
       break;
 
     default:
@@ -930,41 +945,56 @@ static void SetFlagState(DomFlag *dflag, DomFlagState state, DomTeam *controller
       return;
   }
 
-  int controlling_freq = (controller ? controller->cfg_team_freq : DOM_NEUTRAL_FREQ);
-  int flag_entity_freq = (flag_entity_controller ? flag_entity_controller->cfg_team_freq : DOM_NEUTRAL_FREQ);
-
   int change = (dflag->state != state) ||
-    (dflag->controlling_freq != controlling_freq) ||
-    (dflag->controller_influence != influence) ||
-    (dflag->flag_freq != flag_entity_freq);
+    (dflag->controlling_team != controlling_team) ||
+    (dflag->acquired_influence != influence) ||
+    (dflag->flag_team != flag_entity_controlling_team);
 
   dflag->state = state;
-  dflag->controlling_freq = controlling_freq;
-  dflag->controller_influence = influence;
-  dflag->flag_freq = flag_entity_freq;
+  dflag->controlling_team = controlling_team;
+  dflag->acquired_influence = influence;
+  dflag->flag_team = flag_entity_controlling_team;
 
-  FlagInfo info = { FI_ONMAP, NULL, -1, -1, dflag->flag_freq };
+  FlagInfo info = { FI_ONMAP, NULL, -1, -1, (dflag->flag_team ? dflag->flag_team->cfg_team_freq : DOM_NEUTRAL_FREQ) };
   flagcore->SetFlags(dflag->arena, dflag->flag_id, &info, 1);
   UpdateFlagState(dflag->arena);
 
   if (change) {
     dflag->last_influence_update = current_millis();
 
-    chat->SendArenaMessage(dflag->arena, "Flag state change! Flag ID: %d, state: %d, team: %d, influence: %d, entity team: %d", dflag->flag_id, state, controlling_freq, influence, flag_entity_freq);
+    chat->SendArenaMessage(dflag->arena, "Flag state change! Flag ID: %d, state: %d, team: %d, influence: %d, entity team: %d", dflag->flag_id, state, (controlling_team ? controlling_team->cfg_team_freq : DOM_NEUTRAL_FREQ), influence, (flag_entity_controlling_team ? flag_entity_controlling_team->cfg_team_freq : DOM_NEUTRAL_FREQ));
   }
 }
 
-static int GetRegionRequisition(DomRegion *dregion, DomTeam *dteam) {
-  if (!dregion) {
-    lm->Log(L_ERROR, "<%s> ERROR: GetRegionRequisition called with a null dregion parameter", DOM_MODULE_NAME);
-    return -1;
-  }
-
+static int GetTeamRegionInfluence(DomTeam *dteam, DomRegion *dregion) {
   if (!dteam) {
-    lm->Log(L_ERROR, "<%s> ERROR: GetRegionRequisition called with a null dteam parameter", DOM_MODULE_NAME);
+    lm->Log(L_ERROR, "<%s> ERROR: GetTeamRegionInfluence called with a null dteam parameter", DOM_MODULE_NAME);
     return -1;
   }
 
+  if (!dregion) {
+    lm->Log(L_ERROR, "<%s> ERROR: GetTeamRegionInfluence called with a null dregion parameter", DOM_MODULE_NAME);
+    return -1;
+  }
+
+  int influence = 0;
+
+  LinkedList *keys;
+  Link *link;
+  char *key;
+
+  if (dregion->flags_initialized) {
+    keys = HashGetKeys(&dregion->flags);
+    FOR_EACH(keys, key, link) {
+      DomFlag *dflag = HashGetOne(&dregion->flags, key);
+
+      if (dflag && dteam == GetFlagControllingTeam(dflag)) {
+        influence += GetFlagProvidedInfluence(dflag);
+      }
+    }
+  }
+
+  return influence;
 }
 
 static int GetRegionProvidedControlPoints(DomRegion *dregion) {
@@ -973,6 +1003,7 @@ static int GetRegionProvidedControlPoints(DomRegion *dregion) {
     return -1;
   }
 
+  return dregion->cfg_region_value;
 }
 
 static int GetRegionRequiredInfluence(DomRegion *dregion) {
@@ -984,29 +1015,29 @@ static int GetRegionRequiredInfluence(DomRegion *dregion) {
   return dregion->cfg_required_influence;
 }
 
-static int GetRegionAcquiredInfluence(DomRegion *dregion, DomTeam *dteam) {
-  if (!dregion) {
-    lm->Log(L_ERROR, "<%s> ERROR: GetRegionAcquiredInfluence called with a null dregion parameter", DOM_MODULE_NAME);
+static int GetTeamAcquiredRegionInfluence(DomTeam *dteam, DomRegion *dregion) {
+  if (!dteam) {
+    lm->Log(L_ERROR, "<%s> ERROR: GetTeamAcquiredRegionInfluence called with a null dteam parameter", DOM_MODULE_NAME);
     return -1;
   }
 
-  if (!dteam) {
-    lm->Log(L_ERROR, "<%s> ERROR: GetRegionAcquiredInfluence called with a null dteam parameter", DOM_MODULE_NAME);
+  if (!dregion) {
+    lm->Log(L_ERROR, "<%s> ERROR: GetTeamAcquiredRegionInfluence called with a null dregion parameter", DOM_MODULE_NAME);
     return -1;
   }
 
   UpdateRegionAcquiredInfluence(dregion);
 
-  return dregion->controlling_freq == dteam->cfg_team_freq ? dregion->controller_influence : 0;
+  return dregion->controlling_team == dteam ? dregion->acquired_influence : 0;
 }
 
-static DomTeam* getRegionControllingTeam(DomRegion *dregion) {
+static DomTeam* GetRegionControllingTeam(DomRegion *dregion) {
   if (!dregion) {
-    lm->Log(L_ERROR, "<%s> ERROR: getRegionControllingTeam called with a null dregion parameter", DOM_MODULE_NAME);
+    lm->Log(L_ERROR, "<%s> ERROR: GetRegionControllingTeam called with a null dregion parameter", DOM_MODULE_NAME);
     return DOM_NEUTRAL_FREQ;
   }
 
-  return dregion->controlling_freq;
+  return dregion->controlling_team;
 }
 
 static void SetRegionState(DomRegion *dregion, DomRegionState state, DomTeam *dteam, int influence) {
@@ -1014,6 +1045,8 @@ static void SetRegionState(DomRegion *dregion, DomRegionState state, DomTeam *dt
     lm->Log(L_ERROR, "<%s> ERROR: SetRegionState called with a null dregion parameter", DOM_MODULE_NAME);
     return;
   }
+
+  // TODO: All sorts of validation
 
   UpdateRegionAcquiredInfluence(dregion);
 }
@@ -1026,72 +1059,105 @@ static void UpdateFlagAcquiredInfluence(DomFlag *dflag) {
     ticks_t elapsed = ctime - dflag->last_influence_update;
     int required_influence = GetFlagRequiredInfluence(dflag);
 
-    switch (dflag->state) {
-      case DOM_FLAG_STATE_CAPTURING:
-        if (dflag->controlling_freq == dflag->flag_freq) {
-          chat->SendArenaMessage(dflag->arena, "UPDATING FLAG INFLUENCE -- Flag owned by controller; adding %d influence", elapsed);
-          // Add influence up to required influence
-          dflag->controller_influence += elapsed;
+    if (dflag->controlling_team) {
+      switch (dflag->state) {
+        case DOM_FLAG_STATE_CAPTURING:
+          if (dflag->controlling_team == dflag->flag_team) {
+            chat->SendArenaMessage(dflag->arena, "UPDATING FLAG INFLUENCE -- Flag owned by controller; adding %d influence", elapsed);
+            // Add influence up to required influence
+            dflag->acquired_influence += elapsed;
 
-          if (dflag->controller_influence > required_influence) {
-            dflag->controller_influence = required_influence;
+            if (dflag->acquired_influence > required_influence) {
+              dflag->acquired_influence = required_influence;
+            }
+
+          } else {
+            chat->SendArenaMessage(dflag->arena, "UPDATING FLAG INFLUENCE -- Flag owned by enemy; subtracting %d influence", elapsed);
+            // Subtract influence down to zero
+            dflag->acquired_influence -= elapsed;
+
+            if (dflag->acquired_influence < 0) {
+              dflag->acquired_influence = 0;
+            }
           }
 
-        } else {
-          chat->SendArenaMessage(dflag->arena, "UPDATING FLAG INFLUENCE -- Flag owned by enemy; subtracting %d influence", elapsed);
-          // Subtract influence down to zero
-          dflag->controller_influence -= elapsed;
+          chat->SendArenaMessage(dflag->arena, "UPDATED FLAG INFLUENCE: flag %d, inf: %d", dflag->flag_id, dflag->acquired_influence);
 
-          if (dflag->controller_influence < 0) {
-            dflag->controller_influence = 0;
-          }
-        }
+        default:
+          // Influence does not accumulate in these states. Just update the timer.
 
-        chat->SendArenaMessage(dflag->arena, "UPDATED FLAG INFLUENCE: flag %d, inf: %d", dflag->flag_id, dflag->controller_influence);
-
-      default:
-        // Influence does not accumulate in these states. Just update the timer.
-        dflag->last_influence_update = ctime;
+      }
     }
+    else {
+      dflag->acquired_influence = 0;
+    }
+
+    dflag->last_influence_update = ctime;
   }
 }
 
 static void UpdateRegionAcquiredInfluence(DomRegion *dregion) {
+  DomArena *adata = P_ARENA_DATA(dregion->arena, adkey);
+
+  LinkedList *keys;
+  Link *link;
+  char *key;
+
   if (dregion->last_influence_update) {
     ticks_t ctime = current_millis();
     ticks_t elapsed = ctime - dregion->last_influence_update;
 
-    // Things we need:
-    // Freq with most req
-    // Req per freq
+    if (adata->teams_initialized) {
+      // Make sure we have a controlling team, otherwise there's nothing to update.
 
-    switch (dregion->state) {
-      case DOM_REGION_STATE_CAPTURING:
-        if (dflag->controlling_freq == dflag->flag_freq) {
-          chat->SendArenaMessage(dflag->arena, "UPDATING FLAG INFLUENCE -- Flag owned by controller; adding %d influence", elapsed);
-          // Add influence up to required influence
-          dflag->controller_influence += elapsed;
+        switch (dregion->state) {
+          case DOM_REGION_STATE_CONTROLLED:
+            // Assign influence to the required influence, so we don't get into an invalid state
+            dregion->acquired_influence = dregion->cfg_required_influence;
+            break;
 
-          if (dflag->controller_influence > required_influence) {
-            dflag->controller_influence = required_influence;
-          }
+          case DOM_REGION_STATE_CAPTURING:
+            // Region is being captured. Add or subtract acquired influence as necessary
+            if (dregion->controlling_team) {
+              int controller_influence = 0;
+              int opposing_influence = 0;
 
-        } else {
-          chat->SendArenaMessage(dflag->arena, "UPDATING FLAG INFLUENCE -- Flag owned by enemy; subtracting %d influence", elapsed);
-          // Subtract influence down to zero
-          dflag->controller_influence -= elapsed;
+              FOR_EACH(keys, key, link) {
+                DomFlag *dteam = HashGetOne(&adata->teams, key);
+                if (dteam) {
+                  if (dteam == dregion->controlling_team) {
+                    controller_influence = GetTeamRegionInfluence(dteam, dregion);
+                  }
+                  else {
+                    opposing_influence += GetTeamRegionInfluence(dteam, dregion);
+                  }
+                }
+              }
 
-          if (dflag->controller_influence < 0) {
-            dflag->controller_influence = 0;
-          }
+              int diff = controller_influence - opposing_influence;
+              dregion->acquired_influence += diff;
+
+              if (dregion->acquired_influence > dregion->cfg_required_influence) {
+                dregion->acquired_influence = dregion->cfg_required_influence;
+              }
+              else if (dregion->acquired_influence < 0) {
+                dregion->acquired_influence = 0;
+              }
+            }
+            else {
+              // Uh oh. This should never happen.
+              lm->LogA(L_ERROR, DOM_MODULE_NAME, dregion->arena, "Invalid region state: Region %d is in the capturing state with no controlling team", dregion->region_id);
+            }
+
+            break;
         }
-
-        chat->SendArenaMessage(dflag->arena, "UPDATED FLAG INFLUENCE: flag %d, inf: %d", dflag->flag_id, dflag->controller_influence);
-
-      default:
-        // Influence does not accumulate in these states. Just update the timer.
-        dflag->last_influence_update = ctime;
+      }
+      else {
+        dregion->acquired_influence = 0;
+      }
     }
+
+    dregion->last_influence_update = ctime;
   }
 }
 
@@ -1216,7 +1282,7 @@ static void OnFlagTouch(Arena *arena, Player *player, int flag_id) {
     if (dteam && adata->game_state == DOM_GAME_STATE_ACTIVE) {
       // A player is contesting a flag
       ClearFlagTimers(dflag);
-      SetFlagState(dflag, DOM_FLAG_STATE_CONTESTED, GetDomTeam(arena, dflag->controlling_freq), dflag->controller_influence, dteam);
+      SetFlagState(dflag, DOM_FLAG_STATE_CONTESTED, dflag->controlling_team, dflag->acquired_influence, dteam);
       mainloop->SetTimer(OnFlagContestTimer, adata->cfg_flag_contest_time, 0, dflag, dflag);
     } else {
       // Touched by someone outside of the domination game or the game is not active. Restore the
@@ -1240,36 +1306,41 @@ static void OnFlagContestTimer(void *param) {
   DomArena *adata = P_ARENA_DATA(dflag->arena, adkey);
   DomTeam *dteam;
 
+  // TODO:
+  // Clean this up a bit. Nothing should be calling UpdateFlagAcquiredInfluence except the API
+  // functions. But as we're somewhat order dependent, we may need a new API call to get the team
+  // that controls the logical flag, the flag entity and the acquired influence.
+
   ClearFlagTimers(dflag);
-  int req_influence = GetFlagRequiredInfluence(dflag);
+  int required_influence = GetFlagRequiredInfluence(dflag);
   int remaining_time;
 
   if (adata->game_state == DOM_GAME_STATE_ACTIVE) {
     UpdateFlagAcquiredInfluence(dflag);
     chat->SendArenaMessage(dflag->arena, "Running flag capture timer handler");
 
-    if (dflag->flag_freq != dflag->controlling_freq || dflag->controller_influence < req_influence) {
-      if (dflag->controlling_freq == DOM_NEUTRAL_FREQ) {
+    if (dflag->flag_team != dflag->controlling_team || dflag->acquired_influence < required_influence) {
+      if (!dflag->controlling_team) {
         // Flag has not yet been controlled. Give it to the new team
-        dteam = GetDomTeam(dflag->arena, dflag->flag_freq);
-        remaining_time = req_influence / 10;
+        dteam = dflag->flag_team;
+        remaining_time = required_influence / 10;
 
         chat->SendArenaMessage(dflag->arena, "Flag is neutral. Beginning immediate capture for team %d", dteam->cfg_team_freq);
         SetFlagState(dflag, DOM_FLAG_STATE_CAPTURING, dteam, 0, dteam);
       } else {
-        dteam = GetDomTeam(dflag->arena, dflag->controlling_freq);
-        remaining_time = (dflag->flag_freq == dflag->controlling_freq ? (req_influence - dflag->controller_influence) : dflag->controller_influence) / 10;
+        dteam = dflag->controlling_team;
+        remaining_time = (dflag->flag_team == dteam ? (required_influence - dflag->acquired_influence) : dflag->acquired_influence) / 10;
 
-        chat->SendArenaMessage(dflag->arena, "Flag is controlled. Beginning flag %s for team %d (controller: %d)", dflag->flag_freq == dflag->controlling_freq ? "capture" : "decapture", dflag->flag_freq, dflag->controlling_freq);
-        SetFlagState(dflag, DOM_FLAG_STATE_CAPTURING, dteam, dflag->controller_influence, GetDomTeam(dflag->arena, dflag->flag_freq));
+        chat->SendArenaMessage(dflag->arena, "Flag is controlled. Beginning flag %s for team %d (controller: %d)", dflag->flag_team == dteam ? "capture" : "decapture", dflag->flag_team->cfg_team_freq, dteam->cfg_team_freq);
+        SetFlagState(dflag, DOM_FLAG_STATE_CAPTURING, dteam, dflag->acquired_influence, dflag->flag_team);
       }
 
-      chat->SendArenaMessage(dflag->arena, "Setting capture timer to run in %d ticks (out of %d). influence: %d, req inf: %d", remaining_time, req_influence / 10, dflag->controller_influence, req_influence);
+      chat->SendArenaMessage(dflag->arena, "Setting capture timer to run in %d ticks (out of %d). influence: %d, req inf: %d", remaining_time, required_influence / 10, dflag->acquired_influence, required_influence);
       mainloop->SetTimer(OnFlagCaptureTimer, remaining_time, 0, dflag, dflag);
     } else {
-      chat->SendArenaMessage(dflag->arena, "Flag is controlled and controlling team didn't lose any influence. Set state to CONTROLLED for team %d", dflag->controlling_freq);
-      dteam = GetDomTeam(dflag->arena, dflag->controlling_freq);
-      SetFlagState(dflag, DOM_FLAG_STATE_CONTROLLED, dteam, req_influence, dteam);
+      chat->SendArenaMessage(dflag->arena, "Flag is controlled and controlling team didn't lose any influence. Set state to CONTROLLED for team %d", dflag->controlling_team->cfg_team_freq);
+      dteam = dflag->controlling_team;
+      SetFlagState(dflag, DOM_FLAG_STATE_CONTROLLED, dteam, required_influence, dteam);
     }
   }
 }
@@ -1287,17 +1358,17 @@ static void OnFlagCaptureTimer(void *param) {
 
     chat->SendArenaMessage(dflag->arena, "Running flag capture timer handler");
 
-    if (dflag->flag_freq != dflag->controlling_freq) {
+    if (dflag->flag_team != dflag->controlling_team) {
       // Flag has been "flipped" to a new freq
-      dteam = GetDomTeam(dflag->arena, dflag->flag_freq);
-      chat->SendArenaMessage(dflag->arena, "Flag is controlled by a team other than the team controlling the flag. Flag must have been controlled and is flipping. New team: %d, old team: %d", dflag->flag_freq, dflag->controlling_freq);
+      dteam = dflag->flag_team;
+      chat->SendArenaMessage(dflag->arena, "Flag is controlled by a team other than the team controlling the flag. Flag must have been controlled and is flipping. New team: %d, old team: %d", dflag->flag_team->cfg_team_freq, dflag->controlling_team->cfg_team_freq);
 
       SetFlagState(dflag, DOM_FLAG_STATE_CAPTURING, dteam, 0, dteam);
       mainloop->SetTimer(OnFlagCaptureTimer, (req_influence / 10), 0, dflag, dflag);
     } else {
       // Flag has been fully controlled
-      dteam = GetDomTeam(dflag->arena, dflag->controlling_freq);
-      chat->SendArenaMessage(dflag->arena, "Flag is fully controlled by the new team. Team: %d", dflag->controlling_freq);
+      dteam = dflag->controlling_team;
+      chat->SendArenaMessage(dflag->arena, "Flag is fully controlled by the new team. Team: %d", dflag->controlling_team->cfg_team_freq);
 
       SetFlagState(dflag, DOM_FLAG_STATE_CONTROLLED, dteam, req_influence, dteam);
     }
@@ -1318,7 +1389,7 @@ static void OnFlagStateChange(DomFlag *dflag, DomFlagState state, DomTeam *dteam
   // elseif multiple teams are tied for most influence:
   //  set region state to CONTESTED
   // elseif region's controlling team != iteam or controlling team's
-  // total requisition is lower than the required req for the region:
+  // total influence is lower than the required req for the region:
   //  set region capture timer
   //  set region state to CAPTURING
   // else
