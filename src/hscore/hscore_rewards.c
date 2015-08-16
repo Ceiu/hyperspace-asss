@@ -397,13 +397,13 @@ local void flagWinCallback(Arena *arena, int freq, int *pts)
 					int exp_reward = adata->max_flag_exp;
 					int hsd_reward = adata->max_flag_money;
 
-					int pmul_exp = items->getPropertySum(i, i->p_ship, "exp_multiplier", 100);
-					float exp_mul = ((float) pmul_exp / 100.0);
-					int pmul_hsd = items->getPropertySum(i, i->p_ship, "hsd_multiplier", 100);
-					float hsd_mul = ((float) pmul_hsd / 100.0);
+					// int pmul_exp = items->getPropertySum(i, i->p_ship, "exp_multiplier", 100);
+					// float exp_mul = ((float) pmul_exp / 100.0);
+					// int pmul_hsd = items->getPropertySum(i, i->p_ship, "hsd_multiplier", 100);
+					// float hsd_mul = ((float) pmul_hsd / 100.0);
 
-					exp_reward *= exp_mul;
-					hsd_reward *= hsd_mul;
+					// exp_reward *= exp_mul;
+					// hsd_reward *= hsd_mul;
 
 					//no need to send message, as the team announcement works just fine
 					database->addMoney(i, MONEY_TYPE_FLAG, hsd_reward);
@@ -412,13 +412,13 @@ local void flagWinCallback(Arena *arena, int freq, int *pts)
 					int exp_reward = adata->max_loss_exp;
 					int hsd_reward = adata->max_loss_money;
 
-					int pmul_exp = items->getPropertySum(i, i->p_ship, "exp_multiplier", 100);
-					float exp_mul = ((float) pmul_exp / 100.0);
-					int pmul_hsd = items->getPropertySum(i, i->p_ship, "hsd_multiplier", 100);
-					float hsd_mul = ((float) pmul_hsd / 100.0);
+					// int pmul_exp = items->getPropertySum(i, i->p_ship, "exp_multiplier", 100);
+					// float exp_mul = ((float) pmul_exp / 100.0);
+					// int pmul_hsd = items->getPropertySum(i, i->p_ship, "hsd_multiplier", 100);
+					// float hsd_mul = ((float) pmul_hsd / 100.0);
 
-					exp_reward *= exp_mul;
-					hsd_reward *= hsd_mul;
+					// exp_reward *= exp_mul;
+					// hsd_reward *= hsd_mul;
 
 					database->addMoney(i, MONEY_TYPE_FLAG, hsd_reward);
 					database->addExp(i, exp_reward);

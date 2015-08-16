@@ -12,6 +12,8 @@
 /* include for size_t */
 #include <stddef.h>
 #include <time.h>
+#include "sizes.h"
+#include "pthread.h"
 
 #ifndef ATTR_FORMAT
 #define ATTR_FORMAT(a,b,c)
@@ -22,6 +24,7 @@
 
 #ifdef USING_MSVC
 #include <stdarg.h>
+#include <stdio.h>
 #define vsnprintf rpl_vsnprintf
 #define snprintf rpl_snprintf
 #define vasprintf rpl_vasprintf
@@ -34,9 +37,9 @@ int rpl_asprintf(char **, const char *, ...);
 
 /** represents a time, either absolute or relative.
  * ticks are 31 bits in size. the value is stored in the lower 31 bits
- * of an unsigned int. don't do arithmatic on these directly, use the
+ * of an unsigned int. don't do arithmetic on these directly, use the
  * TICK_* macros, to handle wraparound. */
-typedef unsigned int ticks_t;
+typedef u32 ticks_t;
 
 /** the difference between two ticks_t values */
 #define TICK_DIFF(a,b) ((signed int)(((a)<<1)-((b)<<1))>>1)
@@ -46,7 +49,17 @@ typedef unsigned int ticks_t;
  ** ticks value. use like: TICK_MAKE(current_ticks() + 1000). */
 #define TICK_MAKE(a) ((a) & 0x7fffffff)
 
-/* miscelaneous stuff */
+
+typedef struct TimeoutSpec
+{
+#ifndef WIN32
+	struct timespec target;
+#else
+	u32 target; /* milliseconds */
+#endif
+} TimeoutSpec;
+
+/* miscellaneous stuff */
 
 /** gets the current server time in ticks (1/100ths of a second). ticks
  ** are used for all game-related purposes. */
@@ -60,6 +73,12 @@ void fullsleep(long millis);
 
 /** portable localtime_r wrapper */
 void alocaltime_r(time_t *t, struct tm *_tm);
+
+/** Some functions let you specific a timeout using a absolute time value.
+ * This method creates such an absolute time value from a relative value.
+ * @param milliseconds How many milliseconds from now that this timeout expires
+ */
+TimeoutSpec schedule_timeout(unsigned milliseconds);
 
 /** strips a trailing CR or LF off the end of a string. this modifies
  ** the string, and returns it. */
@@ -141,6 +160,12 @@ void wrap_text(const char *txt, int mlen, char delim,
  */
 void Error(int code, char *message, ...) ATTR_FORMAT(printf, 2, 3);
 
+/** Set the name of the given thread (or do nothing is this is not supported on your platform).
+ * To see this name try `ps H -o 'pid tid cmd comm'` or `info thread` when you are debugging in GDB
+ * @param thread posix thread
+ * @name format printf format string
+ */
+void set_thread_name(pthread_t thread, const char *format, ...) ATTR_FORMAT(printf, 2, 3);
 
 /* list manipulation functions */
 
@@ -378,8 +403,6 @@ struct StringBuffer
 
 #ifndef NOMPQUEUE
 
-#include "pthread.h"
-
 /* message passing queue stuff */
 
 /** a simple thread-safe queue built on top of pthreads.
@@ -389,6 +412,7 @@ typedef struct MPQueue
 	LinkedList list;
 	pthread_mutex_t mtx;
 	pthread_cond_t cond;
+	pthread_condattr_t condattr;
 } MPQueue;
 
 /** initalizes an mpqueue. you need to allocate memory for it yourself. */
@@ -402,9 +426,16 @@ void MPAdd(MPQueue *mpq, void *data);
  * NULL. this will not block. */
 void * MPTryRemove(MPQueue *mpq);
 /** removes an item from the front of the queue.
- * if there queue is empty, this will block until there's something to
+ * if the queue is empty, this will block until there's something to
  * remove, and then return it. */
 void * MPRemove(MPQueue *mpq);
+/** Removes an item from the front of the queue.
+ * this function will wait up to the specified milliseconds (see schedule_timeout()) if necessary
+ * for an item to become available. If an item becomes available
+ * before that timeout this function will return early with that item.
+ * This function only returns NULL if the given timeout has expired.
+ */
+void * MPTimeoutRemove(MPQueue *q, TimeoutSpec timeout);
 /** clear the current contents of the queue. */
 void MPClear(MPQueue *mpq);
 /** clear all instances of this item from the queue. */

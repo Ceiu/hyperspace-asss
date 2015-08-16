@@ -12,7 +12,7 @@ ifeq ($(SYS_NAME),Linux)
 UTIL_LIB = -lutil
 DL_LIB = -ldl
 ZLIB_LIB = -lz
-PTHREAD_LIB = -lpthread
+DASH_PTHREAD = -pthread
 DASH_F_PIC = -fPIC
 EXPORT_SYMBOLS = -rdynamic
 SO = so

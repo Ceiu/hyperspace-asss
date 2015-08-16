@@ -231,13 +231,13 @@ local int ProcessArenaStates(void *dummy)
 						snprintf(a->name, sizeof(a->name), "#foo%s", tempName);
 
 					lm->LogA(L_ERROR, "arenaman", a, "WARNING: the server is no longer in a stable state because of this error. your modules need to be fixed.");
-						
+
 					if (lf)
 					{
 						lf->FlushLog();
 						mm->ReleaseInterface(lf);
 					}
-					
+
 					ad->resurrect = FALSE;
 					ad->reap = FALSE;
 					a->keep_alive = 1;
@@ -254,7 +254,7 @@ local int ProcessArenaStates(void *dummy)
 
 
 /* call with write lock held */
-local Arena * create_arena(const char *name, int permanent)
+local Arena * create_arena(const char *name, int permanent, Player *player)
 {
 	char *t;
 	Arena *a;
@@ -279,7 +279,11 @@ local Arena * create_arena(const char *name, int permanent)
 
 	LLAdd(&aman->arenalist, a);
 
-	lm->Log(L_INFO, "<arenaman> {%s} created arena", name);
+	if (player) {
+		lm->LogP(L_CRITICAL, "arenaman", player, "Player entering empty arena: %s (permanent: %d)", name, permanent);
+	} else {
+		lm->Log(L_CRITICAL, "<arenaman> Creating arena: %s (permanent: %d)", name, permanent);
+	}
 
 	return a;
 }
@@ -598,7 +602,7 @@ local void complete_go(Player *p, const char *reqname, int ship,
 	if (a == NULL)
 	{
 		/* create a non-permanent arena */
-		a = create_arena(name, FALSE);
+		a = create_arena(name, FALSE, p);
 		if (a == NULL)
 		{
 			/* if it fails, dump in first available */
@@ -782,9 +786,9 @@ local int ReapArenas(void *q)
 	Player *p;
 
 	RDLOCK();
-	
+
 	pd->Lock();
-	
+
 	FOR_EACH_ARENA(a)
 	{
 		adata *ad = P_ARENA_DATA(a, adkey);
@@ -793,15 +797,15 @@ local int ReapArenas(void *q)
 		else
 			ad->reap = FALSE;
 	}
-	
+
 	FOR_EACH_PLAYER(p)
-	{		
+	{
 		if (p->arena)
 		{
 			adata *ad = P_ARENA_DATA(p->arena, adkey);
 			ad->reap = FALSE;
 		}
-		
+
 		if (p->newarena && p->arena != p->newarena)
 		{
 			adata *ad = P_ARENA_DATA(p->newarena, adkey);
@@ -815,11 +819,11 @@ local int ReapArenas(void *q)
 			}
 		}
 	}
-	
+
 	FOR_EACH_ARENA(a)
 	{
 		adata *ad = P_ARENA_DATA(a, adkey);
-		
+
 		if (ad->reap && (a->status == ARENA_CLOSING || !a->keep_alive))
 		{
 			lm->Log(L_DRIVEL, "<arenaman> {%s} arena being %s", a->name,
@@ -830,9 +834,9 @@ local int ReapArenas(void *q)
 			a->status = ARENA_DO_WRITE_DATA;
 		}
 	}
-	
+
 	pd->Unlock();
-	
+
 	RDUNLOCK();
 
 	return TRUE;
@@ -1068,7 +1072,7 @@ EXPORT int MM_arenaman(int action, Imodman *mm_, Arena *a)
 	{
 		const char *permanentArenas;
 		persist = mm->GetInterface(I_PERSIST, ALLARENAS);
-		
+
 		/* cfghelp: Arenas:PermanentArenas, global, string
 		 * A list of the names of arenas to permanently set up
 		 * when asss is started up. */
@@ -1083,7 +1087,7 @@ EXPORT int MM_arenaman(int action, Imodman *mm_, Arena *a)
 				++totalCreated;
 				lm->Log(L_INFO, "<arenaman> creating permanent arena '%s'", buffer);
 				/* create the arena and  keep it alive. */
-				create_arena(buffer, TRUE);
+				create_arena(buffer, TRUE, NULL);
 			}
 			lm->Log(L_INFO, "<arenaman> created %i permanent arena(s)", totalCreated);
 		}

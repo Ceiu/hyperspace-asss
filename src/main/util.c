@@ -9,11 +9,17 @@
 #include <ctype.h>
 
 #ifndef WIN32
+
 #include <sys/time.h>
 #include <unistd.h>
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <sys/mman.h>
+
+#else
+
+#include <sys/timeb.h>
+
 #endif
 
 #include "pthread.h"
@@ -41,9 +47,16 @@ struct HashEntry
 ticks_t current_ticks(void)
 {
 #ifndef WIN32
-	struct timeval tv;
-	gettimeofday(&tv,NULL);
-	return TICK_MAKE(tv.tv_sec * 100 + tv.tv_usec / 10000);
+	struct timespec ts;
+	// not affected by leap seconds, user changing the clock, etc
+	clock_gettime(CLOCK_MONOTONIC, &ts);
+
+	// (ticks_t is unsigned)
+	ticks_t ticks = TICK_MAKE(ts.tv_sec);
+	ticks *= 100U; // (ticks * 100) % 2^32
+	ticks += ts.tv_nsec / 10000000;
+
+	return TICK_MAKE(ticks);
 #else
 	return TICK_MAKE(GetTickCount() / 10);
 #endif
@@ -53,9 +66,16 @@ ticks_t current_ticks(void)
 ticks_t current_millis(void)
 {
 #ifndef WIN32
-	struct timeval tv;
-	gettimeofday(&tv,NULL);
-	return TICK_MAKE(tv.tv_sec * 1000 + tv.tv_usec / 1000);
+	struct timespec ts;
+	// not affected by leap seconds, user changing the clock, etc
+	clock_gettime(CLOCK_MONOTONIC, &ts);
+
+	// (ticks_t is unsigned)
+	ticks_t ticks = TICK_MAKE(ts.tv_sec);
+	ticks *= 1000U; // (ticks * 1000) % 2^32
+	ticks += ts.tv_nsec / 1000000;
+
+	return TICK_MAKE(ticks);
 #else
 	return TICK_MAKE(GetTickCount());
 #endif
@@ -71,8 +91,18 @@ void fullsleep(long millis)
 			/* retry if interrupted */;
 	}
 #else
-	/* FIXME: can we do this more accurately? */
-	usleep(millis * 1000L);
+	/* pthread cancel does not cancel the thread during Sleep (unless a special driver is installed).
+	 * This implementation sleeps for 512ms at a time to work around this issue.
+	 * (Without this fix deadlock blocks asss shutdown for a long time)
+	 */
+	int count = millis / 512;
+	for (int i = 0; i < count; ++i)
+	{
+		Sleep(512);
+	}
+
+	int remain = millis % 512;
+	Sleep(remain);
 #endif
 }
 
@@ -88,6 +118,23 @@ void alocaltime_r(time_t *t, struct tm *_tm)
 #endif
 }
 
+TimeoutSpec schedule_timeout(unsigned milliseconds)
+{
+	TimeoutSpec ret;
+
+#ifndef WIN32
+	clock_gettime(CLOCK_MONOTONIC, &ret.target);
+	ret.target.tv_sec  += milliseconds / 1000u;
+	ret.target.tv_nsec += (milliseconds % 1000u) * 1000000u;
+	ret.target.tv_sec  += ret.target.tv_nsec / 1000000000;
+	ret.target.tv_nsec  = ret.target.tv_nsec % 1000000000;
+#else
+	/* win32 pthread uses _ftime64, which unfortunately has an accuracy of only 1 second */
+	ret.target = GetTickCount() + (u32) milliseconds;
+#endif
+
+	return ret;
+}
 
 char *RemoveCRLF(char *p)
 {
@@ -155,6 +202,28 @@ void Error(int level, char *format, ...)
 	exit(level);
 }
 
+#ifndef __GLIBC_PREREQ
+#define __GLIBC_PREREQ(maj, min) 0
+#endif
+
+void set_thread_name(pthread_t thread, const char *format, ...)
+{
+#if !defined(WIN32) && __GLIBC_PREREQ(2, 12)
+	va_list args;
+	char name[255];
+
+	va_start(args, format);
+
+	if (vsnprintf(name, 255, format, args) < 0)
+	{
+		va_end(args);
+		return;
+	}
+
+	pthread_setname_np(thread, name);
+	va_end(args);
+#endif
+}
 
 char *astrncpy(char *dest, const char *source, size_t n)
 {
@@ -1213,7 +1282,8 @@ void SBInit(StringBuffer *sb)
 void SBPrintf(StringBuffer *sb, const char *fmt, ...)
 {
 	va_list args;
-	int len, used, needed;
+	int len, used;
+	size_t needed;
 
 	/* figure out how long the result is */
 	va_start(args, fmt);
@@ -1272,7 +1342,14 @@ void MPInit(MPQueue *q)
 {
 	LLInit(&q->list);
 	pthread_mutex_init(&q->mtx, NULL);
+#ifndef WIN32
+	pthread_condattr_init(&q->condattr);
+	pthread_condattr_setclock(&q->condattr, CLOCK_MONOTONIC);
+	pthread_cond_init(&q->cond, &q->condattr);
+#else
 	pthread_cond_init(&q->cond, NULL);
+#endif
+
 }
 
 void MPDestroy(MPQueue *q)
@@ -1280,6 +1357,9 @@ void MPDestroy(MPQueue *q)
 	LLEmpty(&q->list);
 	pthread_mutex_destroy(&q->mtx);
 	pthread_cond_destroy(&q->cond);
+#ifndef WIN32
+	pthread_condattr_destroy(&q->condattr);
+#endif
 }
 
 void MPAdd(MPQueue *q, void *data)
@@ -1313,6 +1393,56 @@ void * MPRemove(MPQueue *q)
 	pthread_cleanup_pop(1);
 	return data;
 }
+
+#ifndef WIN32
+
+void * MPTimeoutRemove(MPQueue *q, TimeoutSpec timeout)
+{
+	void *data;
+	int rc = 0;
+
+	/* this is a cancellation point, so we have to be careful about
+	 * cleanup. this casting is a bit hacky, but it's in the man page,
+	 * so it can't be that bad. */
+	pthread_cleanup_push((void(*)(void*)) pthread_mutex_unlock, (void*) &q->mtx);
+
+	pthread_mutex_lock(&q->mtx);
+
+	/* ETIMEDOUT (!= 0) is returned if the timeout elapsed */
+	while (LLIsEmpty(&q->list) && rc == 0)
+	{
+		 rc = pthread_cond_timedwait(&q->cond, &q->mtx, &timeout.target);
+	}
+
+	data = LLRemoveFirst(&q->list);
+
+	pthread_cleanup_pop(1);
+	return data;
+}
+
+#else
+
+/* win32 pthread uses _ftime64, which unfortunately has an accuracy of only 1 second */
+void * MPTimeoutRemove(MPQueue *q, TimeoutSpec timeout)
+{
+	void *data;
+
+	while(1)
+	{
+		pthread_mutex_lock(&q->mtx);
+		data = LLRemoveFirst(&q->list);
+		pthread_mutex_unlock(&q->mtx);
+
+		if (data || GetTickCount() >= timeout.target)
+		{
+			return data;
+		}
+
+		Sleep(1);
+	}
+}
+
+#endif
 
 void MPClear(MPQueue *q)
 {
