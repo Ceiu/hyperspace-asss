@@ -26,7 +26,7 @@
 
 
 /* whether to disallow allow loading modules from anywhere other than ./bin/ */
-/* #define CFG_RESTRICT_MODULE_PATH */
+ #define CFG_RESTRICT_MODULE_PATH
 
 
 /* whether to disallow module loading after the server has been initalized */
