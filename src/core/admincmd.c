@@ -36,6 +36,102 @@ local Ifiletrans *filetrans;
 local Imodman *mm;
 
 
+/** If a player can access any file on the server with the file-access commands. Note that this does
+ *	not provide access to the commands themselves. */
+#define CAP_GLOBAL_FILE_ACCESS "filetrans_access_all"
+
+/** Capability prefix for providing access to specific directories via file access commands. Note
+ *	that these capabilities do not provide access to the commands themselves. */
+#define CAP_DIR_ACCESS_PREFIX "filetrans_dir_"
+
+
+#define ARENAS_DIR "arenas"
+
+
+
+local int can_access_path(Player *player, const char *path)
+{
+	/* Impl note: We're assuming is_valid_path has been run before this */
+	const char *s = path;
+	const char *e = path;
+	char dir[PATH_MAX];
+	char cap[PATH_MAX];
+	char found = 0;
+	size_t len = 0;
+
+	if (!path)
+		return 0;
+
+	/* If the player has the global access cap, we don't need to do anything */
+	if (capman->HasCapability(player, CAP_GLOBAL_FILE_ACCESS)) {
+		lm->LogP(L_INFO, "admincmd", player, "Granted access to file: %s", path);
+		return 1;
+	}
+
+	while (s[0] == '.' && s[1] == '/')
+		s += 2;
+
+	for (e = s; *e; ++e) {
+		if (*e == '/') {
+			found = 1;
+			break;
+		}
+	}
+
+	if (found) {
+		len = (e - s);
+		if (len > PATH_MAX - sizeof(CAP_DIR_ACCESS_PREFIX)) {
+			len = PATH_MAX - sizeof(CAP_DIR_ACCESS_PREFIX);
+		}
+
+		strncpy(dir, s, len);
+		dir[len] = 0;
+	}
+	else {
+		strcpy(dir, "root");
+	}
+
+	if (!strcmp(dir, ARENAS_DIR)) {
+		/* Check if the path has an arenas directory */
+		found = 0;
+		for (s = ++e; *e; ++e) {
+			if (*e == '/') {
+				found = 1;
+				break;
+			}
+		}
+
+		if (found && !strncasecmp(s, player->arena->basename, (e - s))) {
+			/* Player is accessing a file in an arena that gives them access to the command -- this
+			 * is the default, expected behavior */
+			lm->LogP(L_INFO, "admincmd", player, "Granted access to arena-local file: %s", path);
+			return 1;
+		}
+		else {
+			/* Not an arena directory, or the player is accessing an arena other than their current
+			 * check global arena directory access */
+			snprintf(cap, PATH_MAX, "%s%s", CAP_DIR_ACCESS_PREFIX, ARENAS_DIR);
+			if (capman->HasCapability(player, cap)) {
+				lm->LogP(L_INFO, "admincmd", player, "Granted access to arena file: %s", path);
+				return 1;
+			}
+		}
+	}
+	else {
+		/* Not an arena directory -- check global directory access */
+		snprintf(cap, PATH_MAX, "%s%s", CAP_DIR_ACCESS_PREFIX, dir);
+		if (capman->HasCapability(player, cap)) {
+			lm->LogP(L_INFO, "admincmd", player, "Granted access to global file: %s", path);
+			return 1;
+		}
+	}
+
+	lm->LogP(L_INFO, "admincmd", player, "Denied access to file: %s", path);
+	return 0;
+}
+
+
+
 local helptext_t admlogfile_help =
 "Targets: none\n"
 "Args: {flush} or {reopen}\n"
@@ -66,12 +162,16 @@ local void Cdelfile(const char *tc, const char *params, Player *p, const Target 
 	filetrans->GetWorkingDirectory(p, wd, sizeof(wd));
 	snprintf(path, sizeof(path), "%s/%s", wd, params);
 
+	lm->LogP(L_INFO, "admincmd", p, "Player attempting to delete file \"%s\"", path);
+
 	if (!is_valid_path(path))
-		chat->SendMessage(p, "Invalid path or filename.");
+		chat->SendMessage(p, "Invalid path or filename");
+	else if (!can_access_path(p, path))
+		chat->SendMessage(p, "Access denied");
 	else if (remove(path))
 		chat->SendMessage(p, "Error deleting '%s': %s", path, strerror(errno));
 	else
-		chat->SendMessage(p, "Deleted.");
+		chat->SendMessage(p, "Deleted");
 }
 
 
@@ -91,17 +191,21 @@ local void Crenfile(const char *tc, const char *params, Player *p, const Target 
 
 	if (!newfile)
 	{
-		chat->SendMessage(p, "Bad syntax.");
+		chat->SendMessage(p, "Bad syntax");
 		return;
 	}
 
 	snprintf(oldpath, sizeof(oldpath), "%s/%s", wd, newpath);
 	snprintf(newpath, sizeof(newpath), "%s/%s", wd, newfile);
 
+	lm->LogP(L_INFO, "admincmd", p, "Player attempting to rename file \"%s\" to \"%s\"", oldpath, newpath);
+
 	if (!is_valid_path(oldpath))
-		chat->SendMessage(p, "Invalid old path.");
+		chat->SendMessage(p, "Invalid old path");
 	else if (!is_valid_path(newpath))
-		chat->SendMessage(p, "Invalid new path.");
+		chat->SendMessage(p, "Invalid new path");
+	else if (!can_access_path(p, oldpath) || !can_access_path(p, newpath))
+		chat->SendMessage(p, "Access denied");
 	else if (
 #ifdef WIN32
 			remove(newpath) ||
@@ -110,7 +214,7 @@ local void Crenfile(const char *tc, const char *params, Player *p, const Target 
 		chat->SendMessage(p, "Error renaming '%s' to '%s': %s", oldpath,
 				newpath, strerror(errno));
 	else
-		chat->SendMessage(p, "Renamed.");
+		chat->SendMessage(p, "Renamed");
 }
 
 
@@ -126,15 +230,19 @@ local void Cgetfile(const char *tc, const char *params, Player *p, const Target 
 
 	if (!IS_STANDARD(p))
 	{
-		chat->SendMessage(p, "Your client doesn't support file transfers.");
+		chat->SendMessage(p, "Your client doesn't support file transfers");
 		return;
 	}
 
 	filetrans->GetWorkingDirectory(p, wd, sizeof(wd));
 	snprintf(path, sizeof(path), "%s/%s", wd, params);
 
+	lm->LogP(L_INFO, "admincmd", p, "Player attempting to retrieve file \"%s\"", path);
+
 	if (!is_valid_path(path))
-		chat->SendMessage(p, "Invalid path.");
+		chat->SendMessage(p, "Invalid path");
+	else if (!can_access_path(p, path))
+		chat->SendMessage(p, "Access denied");
 	else
 	{
 		int res = filetrans->SendFile(p, path, get_basename(path), 0);
@@ -257,7 +365,7 @@ local void Cputfile(const char *tc, const char *params, Player *p, const Target 
 
 	if (!IS_STANDARD(p))
 	{
-		chat->SendMessage(p, "Your client doesn't support file transfers.");
+		chat->SendMessage(p, "Your client doesn't support file transfers");
 		return;
 	}
 
@@ -266,7 +374,13 @@ local void Cputfile(const char *tc, const char *params, Player *p, const Target 
 	t = delimcpy(clientfile, params, sizeof(clientfile), ':');
 	snprintf(serverpath, sizeof(serverpath), "%s/%s", wd, t ? t : get_basename(clientfile));
 
-	if (is_valid_path(serverpath))
+	lm->LogP(L_INFO, "admincmd", p, "Player attempting to upload file: %s", serverpath);
+
+	if (!is_valid_path(serverpath))
+		chat->SendMessage(p, "Invalid server path");
+	else if (!can_access_path(p, serverpath))
+		chat->SendMessage(p, "Access denied");
+	else
 	{
 		int ret;
 		upload_t *u = amalloc(sizeof(*u) + strlen(serverpath));
@@ -279,12 +393,10 @@ local void Cputfile(const char *tc, const char *params, Player *p, const Target 
 		ret = filetrans->RequestFile(p, clientfile, uploaded, u);
 		if (ret == MM_FAIL)
 		{
-			chat->SendMessage(p, "Error sending file.");
+			chat->SendMessage(p, "Error sending file");
 			afree(u);
 		}
 	}
-	else
-		chat->SendMessage(p, "Invalid server path.");
 }
 
 
@@ -310,7 +422,14 @@ local void Cputzip(const char *tc, const char *params, Player *p, const Target *
 	else
 		astrncpy(serverpath, wd, sizeof(serverpath));
 
-	if (is_valid_path(serverpath))
+
+	lm->LogP(L_INFO, "admincmd", p, "Player attempting to upload zip file: %s", serverpath);
+
+	if (!is_valid_path(serverpath))
+		chat->SendMessage(p, "Invalid server path");
+	else if (!can_access_path(p, serverpath))
+		chat->SendMessage(p, "Access denied");
+	else
 	{
 		upload_t *u = amalloc(sizeof(*u) + strlen(serverpath));
 
@@ -369,16 +488,21 @@ local void Ccd(const char *tc, const char *params, Player *p, const Target *targ
 	struct stat st;
 	if (!*params)
 		params = ".";
+
+	lm->LogP(L_INFO, "admincmd", p, "Player attempting to set cwd to \"%s\"", params);
+
 	if (!is_valid_path(params))
-		chat->SendMessage(p, "Invalid path.");
+		chat->SendMessage(p, "Invalid path");
+	else if (!can_access_path(p, params))
+		chat->SendMessage(p, "Access denied");
 	else if (stat(params, &st) < 0)
-		chat->SendMessage(p, "The specified path doesn't exist.");
+		chat->SendMessage(p, "The specified path doesn't exist");
 	else if (!S_ISDIR(st.st_mode))
-		chat->SendMessage(p, "The specified path isn't a directory.");
+		chat->SendMessage(p, "The specified path isn't a directory");
 	else
 	{
 		filetrans->SetWorkingDirectory(p, params);
-		chat->SendMessage(p, "Changed working directory.");
+		chat->SendMessage(p, "Changed working directory");
 	}
 }
 
@@ -415,7 +539,7 @@ local void Cmakearena(const char *tc, const char *params, Player *p, const Targe
 			/* initial # ok */;
 		else if (!isalnum(*c) || isupper(*c) || *params == '\0')
 		{
-			chat->SendMessage(p, "Illegal arena name.");
+			chat->SendMessage(p, "Illegal arena name");
 			return;
 		}
 
