@@ -95,7 +95,7 @@ no_bin:
 }
 
 
-local int finder(char *dest, int destlen, const char *ar, const char *name)
+local int finder(char *dest, int destlen, const char *ar, const char *name, const char *searchpath)
 {
 	astrncpy(dest, name, destlen);
 	return 0;
