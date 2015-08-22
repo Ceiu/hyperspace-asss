@@ -456,7 +456,7 @@ typedef struct MMapData
 	/** a pointer to the data in the file */
 	void *data;
 	/** how long the file is. don't read/write past this offset from data. */
-	int len;
+	u32 len;
 	/** some indication of the last time this file was modified.
 	 * note that this might not be a real time_t value, but at least it
 	 * will change when the file is modified. */
