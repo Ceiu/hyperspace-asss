@@ -54,7 +54,7 @@ local int aokey;
 
 /* utility functions */
 local lvzdata *getDataFromId(LinkedList *list, u16 object_id);
-local void ReadLVZFile(Arena *a, byte *file, int flen, int opt);
+local void ReadLVZFile(Arena *a, byte *file, u32 flen, int opt);
 
 /* callbacks */
 local void PBroadcast(Player *p, byte *pkt, int len);
@@ -723,7 +723,7 @@ struct OBJECT_SECTION
 	/* image data */
 };
 
-void ReadLVZFile(Arena *a, byte *file, int flen, int opt)
+void ReadLVZFile(Arena *a, byte *file, u32 flen, int opt)
 {
 	aodata *ad = P_ARENA_DATA(a, aokey);
 	struct LVZ_HEADER *lvzh = (struct LVZ_HEADER *)file;
@@ -740,21 +740,24 @@ void ReadLVZFile(Arena *a, byte *file, int flen, int opt)
 	while (num_sections--)
 	{
 		struct SECTION_HEADER *secth = (struct SECTION_HEADER *)file;
-		int namelen;
+		u32 namelen;
 
 		if (flen <= sizeof(struct SECTION_HEADER)) return;
+		file += sizeof(struct SECTION_HEADER);
+		flen -= sizeof(struct SECTION_HEADER);
 
 		if (secth->CONT != HEADER_CONT) return;
 		/* if EOF without a nul-term, we're sunk */
 		namelen = strlen(secth->fname);
 
-		file += sizeof(struct SECTION_HEADER) + namelen;
-		flen -= sizeof(struct SECTION_HEADER) + namelen;
+		if (flen <= namelen) return;
+		file += namelen;
+		flen -= namelen;
 
 		if (namelen == 0 && secth->file_time == 0)
 		{
 			uLongf decompress_size = secth->decompress_size;
-			int dlen = decompress_size;
+			u32 dlen = decompress_size;
 			byte *dcmp = amalloc(dlen);
 
 			if (uncompress(dcmp, &decompress_size, file, secth->compressed_size) == Z_OK)
@@ -789,6 +792,7 @@ void ReadLVZFile(Arena *a, byte *file, int flen, int opt)
 			afree(dcmp);
 		}
 
+		if (flen <= secth->compressed_size) return;
 		file += secth->compressed_size;
 		flen -= secth->compressed_size;
 	}
