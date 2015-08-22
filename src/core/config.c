@@ -242,9 +242,32 @@ local void report_error(const char *error)
 		fprintf(stderr, "W <config> %s\n", error);
 }
 
-local int locate_config_file(char *dest, int destlen, const char *arena, const char *name)
+local int locate_config_file(char *dest, int destlen, const char *arena, const char *name, const char *searchpath)
 {
-	const char *path = CFG_CONFIG_SEARCH_PATH;
+	const char *cfg_path = CFG_CONFIG_SEARCH_PATH;
+
+	size_t cfg_path_len = strlen(cfg_path);
+	size_t search_path_len = (searchpath ? strlen(searchpath) : 0);
+
+	char *path = alloca(cfg_path_len + search_path_len + 4);
+
+	if (searchpath && search_path_len) {
+		strcpy(path, searchpath);
+		path[search_path_len++] = '%';
+		path[search_path_len++] = 'n';
+	}
+
+	if (cfg_path && cfg_path_len) {
+		if (search_path_len)
+			path[search_path_len++] = ':';
+
+		strcpy((path + search_path_len), cfg_path);
+		path[search_path_len + cfg_path_len] = 0;
+	}
+	else {
+		path[search_path_len] = 0;
+	}
+
 	struct replace_table repls[] =
 		{ { 'n', name }, { 'b', arena } };
 
@@ -455,7 +478,7 @@ local ConfigHandle OpenConfigFile(const char *arena, const char *name,
 	struct stat st;
 
 	/* make sure at least the base file exists */
-	if (locate_config_file(fname, sizeof(fname), arena, name) == -1)
+	if (locate_config_file(fname, sizeof(fname), arena, name, NULL) == -1)
 		return NULL;
 
 	/* first try to get it out of the table */

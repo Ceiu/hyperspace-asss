@@ -6,8 +6,7 @@
 
 typedef struct APPContext APPContext;
 
-typedef int (*APPFileFinderFunc)(char *dest, int destlen,
-		const char *arena, const char *name);
+typedef int (*APPFileFinderFunc)(char *dest, int destlen, const char *arena, const char *name, const char *searchpath);
 typedef void (*APPReportErrFunc)(const char *error);
 
 
