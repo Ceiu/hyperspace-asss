@@ -5,8 +5,7 @@
 /* pyconst: config, "CFG_*" */
 
 /* the search path for config files */
-#define CFG_CONFIG_SEARCH_PATH "arenas/%b/%n:conf/%n:%n:arenas/(default)/%n"
-
+#define CFG_CONFIG_SEARCH_PATH "arenas/%b/%n:arenas/(default)/%n:conf/%n:%n"
 
 /* the search path for map files */
 #define CFG_LVL_SEARCH_PATH "arenas/%b/%m:maps/%m:%m:arenas/%b/%b.lvl:maps/%b.lvl:arenas/(default)/%m"

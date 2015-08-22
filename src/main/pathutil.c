@@ -1,7 +1,9 @@
 
 /* dist: public */
 
+#include <ctype.h>
 #include <stdlib.h>
+#include <stdio.h>
 #include <string.h>
 #include <sys/stat.h>
 
@@ -192,7 +194,6 @@ int is_valid_path(const char *path)
 	return TRUE;
 }
 
-
 const char *get_basename(const char *path)
 {
 	const char *c = path + strlen(path);
@@ -204,4 +205,77 @@ const char *get_basename(const char *path)
 	}
 }
 
+int normalize_path(const char *path, char *out, size_t out_len) {
+	char normalized[PATH_MAX];
+	size_t offset, len, pathlen;
 
+	offset = 0;
+	pathlen = strlen(path);
+
+	if (!path || !out || out_len < 1)
+		return 0;
+
+	if (pathlen < 1 || pathlen > PATH_MAX)
+		return 0;
+
+#ifdef WIN32
+	/* Windows doesn't do symlinks (gracefully) anyway, so we can just use GetFullPathName and call
+	 * a day */
+	if (*path != '/' && !(pathlen > 2 && isalpha(path[0]) && path[1] == ':' && path[2] == '\\')) {
+		getcwd(normalized, PATH_MAX);
+		offset = strlen(normalized);
+
+		normalized[offset++] = '\\';
+	}
+
+	memcpy(&normalized[offset], path, pathlen);
+	normalized[offset + pathlen] = 0;
+
+	return GetFullPathName(normalized, out_len, out, NULL);
+#else
+	if (*path != '/') {
+		getcwd(normalized, PATH_MAX);
+		offset = strlen(normalized);
+	}
+
+	for (const char *end = &path[pathlen], *next; path < end; path = next + 1) {
+		next = (char*) memchr(path, '/', end - path);
+
+		if (next == NULL)
+			next = end;
+
+		len = next - path;
+		switch (len) {
+			case 2:
+				if (path[0] == '.' && path[1] == '.') {
+					char *prev = memrchr(normalized, '/', offset);
+					offset = (prev ? prev - normalized : 0);
+					continue;
+				}
+				break;
+
+			case 1:
+				if (*path == '.')
+					continue;
+
+				break;
+
+			case 0:
+				continue;
+		}
+
+		normalized[offset++] = '/';
+		memcpy(&normalized[offset], path, len);
+		offset += len;
+	}
+
+	normalized[offset++] = 0;
+
+	if (offset <= out_len) {
+		memcpy(out, normalized, offset);
+		return 1;
+	}
+
+	return 0;
+#endif
+}

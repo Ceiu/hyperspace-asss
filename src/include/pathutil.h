@@ -83,5 +83,24 @@ int is_valid_path(const char *path);
  */
 const char *get_basename(const char *path);
 
+
+/**
+ * Normalizes the given path by ensuring it is an absolute path without any relative directory
+ * references. This function operates like realpath, except it will not resolve links.
+ *
+ * @param *path
+ *	The path to normalize
+ *
+ * @param *out
+ *	A pointer to a string to receive the normalized path
+ *
+ * @param out_len
+ *	The size of the output buffer
+ *
+ * @return
+ *	True if the path is normalized and output successfully; false otherwise.
+ */
+int normalize_path(const char *path, char *out, size_t out_len);
+
 #endif
 
