@@ -493,8 +493,6 @@ local void Ccd(const char *tc, const char *params, Player *p, const Target *targ
 
 	if (!is_valid_path(params))
 		chat->SendMessage(p, "Invalid path");
-	else if (!can_access_path(p, params))
-		chat->SendMessage(p, "Access denied");
 	else if (stat(params, &st) < 0)
 		chat->SendMessage(p, "The specified path doesn't exist");
 	else if (!S_ISDIR(st.st_mode))
