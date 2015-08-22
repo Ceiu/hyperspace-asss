@@ -151,6 +151,7 @@ typedef struct GlobalOverrideKeys
 	override_key_t DoorMode;
 	override_key_t JitterTime;
 	override_key_t BombExplodePixels;
+	override_key_t EnterDelay;
 } GlobalOverrideKeys;
 
 //modules
@@ -348,6 +349,8 @@ local void loadOverrides()
 	globalOverrideKeys.DoorMode = clientset->GetOverrideKey("Door", "DoorMode");
 
 	globalOverrideKeys.BombExplodePixels = clientset->GetOverrideKey("Bomb", "BombExplodePixels");
+
+	globalOverrideKeys.EnterDelay = clientset->GetOverrideKey("Kill", "EnterDelay");
 }
 
 local int checkUsingPerShip(Player *p, ShipHull *hull)
@@ -571,6 +574,7 @@ local void addOverrides(Player *p, int shipset)
 		DO_GLOBAL(soccerseeball, Soccer, BallLocation)
 		DO_GLOBAL(doormode, Door, DoorMode)
 		DO_GLOBAL(explodepixels, Bomb, BombExplodePixels)
+		DO_GLOBAL(enterdelay, Kill, EnterDelay)
 	}
 }
 
@@ -672,6 +676,7 @@ local void removeOverrides(Player *p)
 	clientset->PlayerUnoverride(p, globalOverrideKeys.BallLocation);
 	clientset->PlayerUnoverride(p, globalOverrideKeys.DoorMode);
 	clientset->PlayerUnoverride(p, globalOverrideKeys.BombExplodePixels);
+	clientset->PlayerUnoverride(p, globalOverrideKeys.EnterDelay);
 }
 
 /*
