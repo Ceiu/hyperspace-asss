@@ -19,8 +19,13 @@
 #include <stdarg.h>
 #include <stdlib.h>
 
+#ifndef WIN32
+#include <unistd.h>
+#endif
+
 #include "defs.h"
 #include "util.h"
+#include "pathutil.h"
 
 #include "app.h"
 
@@ -147,31 +152,73 @@ void APPRemoveDef(APPContext *ctx, const char *key)
 
 static FileEntry *get_file(APPContext *ctx, const char *name)
 {
-	char fname[PATH_MAX];
+	char fname[PATH_MAX], nfname[PATH_MAX], npfname[PATH_MAX];
+	size_t plen, flen;
 	int ret;
 	FILE *file;
 	FileEntry *fe;
 
-	/* try to find it */
-	ret = ctx->finder(fname, sizeof(fname), ctx->arena, name);
-	if (ret == -1)
-	{
-		do_error(ctx, "Can't find file for arena '%s', name '%s'", ctx->arena, name);
+	if (ctx->file) {
+		if (!normalize_path(ctx->file->fname, npfname, PATH_MAX)) {
+			do_error(ctx, "Unable to normalize file path: %s", ctx->file->fname);
+			return NULL;
+		}
+
+#ifdef WIN32
+#define DIR_SEPARATOR '\\'
+#define ROOT_OFFSET 3
+#else
+#define DIR_SEPARATOR '/'
+#define ROOT_OFFSET 1
+#endif
+
+		char *endp = (char*) memrchr(npfname, DIR_SEPARATOR, strlen(npfname));
+		if (!endp) {
+			endp = npfname;
+			endp[ROOT_OFFSET] = 0;
+		}
+		else {
+			endp[1] = 0;
+		}
+
+		ret = ctx->finder(fname, sizeof(fname), ctx->arena, name, npfname);
+	}
+	else {
+		ret = ctx->finder(fname, sizeof(fname), ctx->arena, name, NULL);
+	}
+
+	if (ret == -1) {
+		do_error(ctx, "Can't find file for arena \"%s\": %s", ctx->arena, name);
 		return NULL;
 	}
 
+	if (!normalize_path(fname, nfname, PATH_MAX)) {
+		do_error(ctx, "Unable to normalize file path: %s", fname);
+		return NULL;
+	}
+
+	/* Ensure we don't include a file from a parent directory (disregarding symlinks) */
+	if (ctx->file) {
+		plen = strlen(npfname);
+		flen = strlen(nfname);
+
+		if (plen > flen || strncmp(npfname, nfname, plen)) {
+			do_error(ctx, "File attempting to include from a parent directory: \"%s\" => \"%s\"", ctx->file->fname, fname);
+			return NULL;
+		}
+	}
+
 	/* try to open it */
-	file = fopen(fname, "r");
-	if (!file)
-	{
-		do_error(ctx, "Can't open file '%s' for reading", fname);
+	file = fopen(nfname, "r");
+	if (!file) {
+		do_error(ctx, "Can't open file \"%s\" for reading", nfname);
 		return NULL;
 	}
 
 	/* package into struct */
 	fe = amalloc(sizeof(*fe));
 	fe->file = file;
-	fe->fname = astrdup(fname);
+	fe->fname = astrdup(nfname);
 	fe->lineno = 0;
 	fe->prev = NULL;
 	return fe;
@@ -182,10 +229,8 @@ void APPAddFile(APPContext *ctx, const char *name)
 {
 	FileEntry *fe;
 
-	if (ctx->depth >= MAX_RECURSION_DEPTH)
-	{
-		do_error(ctx, "Maximum #include recursion depth reached while adding '%s'",
-				name);
+	if (ctx->depth >= MAX_RECURSION_DEPTH) {
+		do_error(ctx, "Maximum #include recursion depth reached while adding '%s'", name);
 		return;
 	}
 
