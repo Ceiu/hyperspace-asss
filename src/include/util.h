@@ -284,7 +284,7 @@ void HashReplace(HashTable *table, const char *key, const void *value);
 /** removes one instance of the key, value pair from the table. */
 void HashRemove(HashTable *table, const char *key, const void *value);
 /** removes the first instance of the key from the table. */
-void HashRemoveAny(HashTable *table, const char *key);
+void *HashRemoveAny(HashTable *table, const char *key);
 /** returns a list with all values that the key maps to in the table. */
 LinkedList *HashGet(HashTable *table, const char *key);
 /** appends all values that the key maps to in the table, to the given list. */

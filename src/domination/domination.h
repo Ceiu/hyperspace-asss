@@ -76,13 +76,13 @@ typedef struct DomFlag DomFlag;
  * Called when a region is changing states
  */
 #define CB_DOM_REGION_STATE_CHANGED "dom_flag_region_changed-1"
-typedef void (*DomRegionStateChangeFunc)(Arena *arena, DomRegion *region, DomRegionState old_state, DomRegionState new_state);
+typedef void (*DomRegionStateChangeFunc)(Arena *arena, DomRegion *dregion, DomRegionState prev_state, DomRegionState new_state);
 
 /**
  * Called when a flag is changing states
  */
 #define CB_DOM_FLAG_STATE_CHANGED "dom_flag_state_changed-1"
-typedef void (*DomFlagStateChangeFunc)(Arena *arena, DomFlag *flag, DomFlagState old_state, DomFlagState new_state);
+typedef void (*DomFlagStateChangeFunc)(Arena *arena, DomFlag *dflag, DomFlagState prev_state, DomFlagState new_state);
 
 
 
