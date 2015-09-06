@@ -6,6 +6,7 @@
 #include "fg_wz.h"
 #include "hscore.h"
 #include <math.h>
+#include <string.h>
 #include "hscore_teamnames.h"
 #include "hscore_shipnames.h"
 #include "jackpot.h"
@@ -90,33 +91,48 @@ local int pdkey;
 local int adkey;
 local BountyMap bounty_map;
 
+// Hack: collision possible for if freq numbers > 255
+local inline char *playtime_key(Player *p, int freq)
+{
+	size_t namelen = strlen(p->name);
+	char *key = amalloc((namelen + 2) * sizeof(char));
+	char *lname = ToLowerStr(astrdup(p->name));
+	memcpy(key, lname, namelen * sizeof(char));
+	afree(lname);
+
+	char freq_suffix = (freq % 255) + 1;
+	key[namelen] = freq_suffix;
+	key[namelen + 1] = '\0';
+	return key;
+}
+
 local inline int flagging_freq(Arena *arena, int freq)
 {
 	int priv_freq_start = cfg->GetInt(arena->cfg, "Team", "PrivFreqStart", 100);
 	int max_freq = cfg->GetInt(arena->cfg, "Team", "MaxFrequency", (priv_freq_start + 2));
-	return freq >= priv_freq_start && freq < max_freq || (freq == 90 || freq == 91);
+	return (freq >= priv_freq_start && freq < max_freq) || (freq == 90 || freq == 91);
 }
 
-local void end_playtime(Player *p)
+local void end_playtime(Player *p, int freq)
 {
 	Arena *arena = p->arena;
 	AData *adata = P_ARENA_DATA(arena, adkey);
 	PData *pdata = PPDATA(p, pdkey);
 
-	char *lower_name = ToLowerStr(astrdup(p->name));
-	ticks_t *last_playtime_ticks = HashGetOne(adata->players_flag_time, lower_name);
+	char *time_key = playtime_key(p, freq);
+	ticks_t *last_playtime_ticks = HashGetOne(adata->players_flag_time, time_key);
 	if (!last_playtime_ticks)
 	{
-		afree(lower_name);
+		afree(time_key);
 		return;
 	}
 
 	*last_playtime_ticks = TICK_MAKE(*last_playtime_ticks + TICK_DIFF(current_ticks(), pdata->last_update_playtime_ticks));
 	pdata->last_update_playtime_ticks = 0;
-	afree(lower_name);
+	afree(time_key);
 }
 
-local void begin_playtime(Player *p)
+local void begin_playtime(Player *p, int freq)
 {
 	Arena *arena = p->arena;
 	AData *adata = P_ARENA_DATA(arena, adkey);
@@ -124,11 +140,14 @@ local void begin_playtime(Player *p)
 
 	if (pdata->last_update_playtime_ticks == 0)
 	{
-		char *lower_name = ToLowerStr(astrdup(p->name));
+		char *time_key = playtime_key(p, freq);
 		pdata->last_update_playtime_ticks = current_ticks();
+
 		ticks_t *t = amalloc(sizeof(*t));
-		HashAdd(adata->players_flag_time, lower_name, t);
-		afree(lower_name);
+		*t = 0;
+
+		HashAdd(adata->players_flag_time, time_key, t);
+		afree(time_key);
 	}
 }
 
@@ -439,17 +458,17 @@ local void flagWinCallback(Arena *arena, int freq, int *pts)
 		pd->Lock();
 		FOR_EACH_PLAYER_IN_ARENA(i, arena)
 			if (flagging_freq(arena, i->p_freq))
-				end_playtime(i);
+				end_playtime(i, i->p_freq);
 
 		ticks_t max_playtime = 0;
 		FOR_EACH_PLAYER_IN_ARENA(i, arena)
 			if (flagging_freq(arena, i->p_freq))
 			{
-				char *lower_name = ToLowerStr(astrdup(i->name));
-				ticks_t *playtime = HashGetOne(adata->players_flag_time, lower_name);
+				char *time_key = playtime_key(i, i->p_freq);
+				ticks_t *playtime = HashGetOne(adata->players_flag_time, time_key);
 				if (TICK_GT(*playtime, max_playtime))
 					max_playtime = *playtime;
-				afree(lower_name);
+				afree(time_key);
 			}
 
 		if (max_playtime == 0)
@@ -460,13 +479,13 @@ local void flagWinCallback(Arena *arena, int freq, int *pts)
 		{
 			if(i->arena == arena && i->p_ship != SHIP_SPEC)
 			{
-				char *lower_name = ToLowerStr(astrdup(i->name));
-				ticks_t *playtime = HashGetOne(adata->players_flag_time, lower_name);				
-				afree(lower_name);
+				char *time_key = playtime_key(i, i->p_freq);
+				ticks_t *playtime = HashGetOne(adata->players_flag_time, time_key);				
+				afree(time_key);
 
 				double time_fraction = 1;
 				if (playtime)
-					time_fraction = HSCR_MIN(*playtime * (*playtime * 0.15) / max_playtime, 1);
+					time_fraction = HSCR_MIN(*playtime * (*playtime * 0.05) / max_playtime, 1);
 
 				if (i->p_freq == freq) {
 					int exp_reward = adata->max_flag_exp;
@@ -537,7 +556,7 @@ local void flagWinCallback(Arena *arena, int freq, int *pts)
 		pd->Lock();
 		FOR_EACH_PLAYER_IN_ARENA(i, arena)
 			if (flagging_freq(arena, i->p_freq))
-				begin_playtime(i);				
+				begin_playtime(i, i->p_freq);
 		pd->Unlock();
 
 		adata->winning_freq = -1;
@@ -847,9 +866,14 @@ local void shipFreqChangeCallback(Player *p, int newship, int oldship, int newfr
 	pdata->periodic_tally = 0;
 
 	if (flagging_freq(p->arena, oldfreq) && !flagging_freq(p->arena, newfreq))
-		end_playtime(p);
+		end_playtime(p, oldfreq);
 	else if (!flagging_freq(p->arena, oldfreq) && flagging_freq(p->arena, newfreq))
-		begin_playtime(p);
+		begin_playtime(p, newfreq);
+	else if (flagging_freq(p->arena, oldfreq) && flagging_freq(p->arena, newfreq))
+	{
+		end_playtime(p, oldfreq);
+		begin_playtime(p, newfreq);
+	}
 }
 
 local void paction(Player *p, int action, Arena *arena)
@@ -859,7 +883,7 @@ local void paction(Player *p, int action, Arena *arena)
 		PData *pdata = PPDATA(p, pdkey);
 		pdata->periodic_tally = 0;
 	} else if (action == PA_LEAVEARENA && flagging_freq(arena, p->p_freq)) {
-		end_playtime(p);
+		end_playtime(p, p->p_freq);
 	}
 }
 
