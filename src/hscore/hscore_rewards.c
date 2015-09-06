@@ -94,7 +94,7 @@ local inline int flagging_freq(Arena *arena, int freq)
 {
 	int priv_freq_start = cfg->GetInt(arena->cfg, "Team", "PrivFreqStart", 100);
 	int max_freq = cfg->GetInt(arena->cfg, "Team", "MaxFrequency", (priv_freq_start + 2));
-	return freq >= priv_freq_start && freq < max_freq;
+	return freq >= priv_freq_start && freq < max_freq || (freq == 90 || freq == 91);
 }
 
 local void end_playtime(Player *p)
@@ -466,7 +466,7 @@ local void flagWinCallback(Arena *arena, int freq, int *pts)
 
 				double time_fraction = 1;
 				if (playtime)
-					time_fraction = HSCR_MIN(*playtime * (*playtime * 0.25) / max_playtime, 1);
+					time_fraction = HSCR_MIN(*playtime * (*playtime * 0.15) / max_playtime, 1);
 
 				if (i->p_freq == freq) {
 					int exp_reward = adata->max_flag_exp;
