@@ -12,6 +12,9 @@
 #include "persist.h"
 #include "formula.h"
 
+#define HSCR_MAX(x, y) (((x) > (y)) ? (x) : (y))
+#define HSCR_MIN(x, y) (((x) < (y)) ? (x) : (y))
+
 typedef struct BountyMap
 {
 	int size; // one dimensional size
@@ -29,6 +32,8 @@ typedef struct PData
 
 	int edit_ppk;
 	int show_exp;
+
+	ticks_t last_update_playtime_ticks;
 } PData;
 
 typedef struct AData
@@ -61,6 +66,8 @@ typedef struct AData
 	int max_flag_exp;
 	int max_loss_money;
 	int max_loss_exp;
+
+	HashTable *players_flag_time;
 } AData;
 
 //modules
@@ -82,6 +89,48 @@ local Ihscoreitems *items;
 local int pdkey;
 local int adkey;
 local BountyMap bounty_map;
+
+local inline int flagging_freq(Arena *arena, int freq)
+{
+	int priv_freq_start = cfg->GetInt(arena->cfg, "Team", "PrivFreqStart", 100);
+	int max_freq = cfg->GetInt(arena->cfg, "Team", "MaxFrequency", (priv_freq_start + 2));
+	return freq >= priv_freq_start && freq < max_freq;
+}
+
+local void end_playtime(Player *p)
+{
+	Arena *arena = p->arena;
+	AData *adata = P_ARENA_DATA(arena, adkey);
+	PData *pdata = PPDATA(p, pdkey);
+
+	char *lower_name = ToLowerStr(astrdup(p->name));
+	ticks_t *last_playtime_ticks = HashGetOne(adata->players_flag_time, lower_name);
+	if (!last_playtime_ticks)
+	{
+		afree(lower_name);
+		return;
+	}
+
+	*last_playtime_ticks = TICK_MAKE(*last_playtime_ticks + TICK_DIFF(current_ticks(), pdata->last_update_playtime_ticks));
+	pdata->last_update_playtime_ticks = 0;
+	afree(lower_name);
+}
+
+local void begin_playtime(Player *p)
+{
+	Arena *arena = p->arena;
+	AData *adata = P_ARENA_DATA(arena, adkey);
+	PData *pdata = PPDATA(p, pdkey);
+
+	if (pdata->last_update_playtime_ticks == 0)
+	{
+		char *lower_name = ToLowerStr(astrdup(p->name));
+		pdata->last_update_playtime_ticks = current_ticks();
+		ticks_t *t = amalloc(sizeof(*t));
+		HashAdd(adata->players_flag_time, lower_name, t);
+		afree(lower_name);
+	}
+}
 
 local FormulaVariable * player_exp_callback(Player *p)
 {
@@ -230,8 +279,10 @@ local void update_flag_rewards(Arena *arena, int freq)
 		winner_var.freq.arena = arena;
 		winner_var.freq.freq = freq;
 
+		// Impl note:
+		// More hackery to make sure only players on the flag teams get rewarded.
 		int priv_freq_start = cfg->GetInt(arena->cfg, "Team", "PrivFreqStart", 100);
-	  int max_freq = cfg->GetInt(arena->cfg, "Team", "MaxFrequency", (priv_freq_start + 2));
+		int max_freq = cfg->GetInt(arena->cfg, "Team", "MaxFrequency", (priv_freq_start + 2));
 
 		// IMPL NOTE: This is a hack to have a single winner/loser freq. It operates under the assumtion
 		// that only two frequences exist for flagging (90/91 at the time of writing). If more freqs are
@@ -379,20 +430,44 @@ local void flagWinCallback(Arena *arena, int freq, int *pts)
 		}
 		else
 		{
-			chat->SendArenaMessage(arena, "Base reward: $%d (%d exp)", adata->max_flag_money, adata->max_flag_exp);
+			chat->SendArenaMessage(arena, "Maximum reward: $%d (%d exp)", adata->max_flag_money, adata->max_flag_exp);
 		}
 
-		// Impl note:
-		// More hackery to make sure only players on the flag teams get rewarded.
 		int priv_freq_start = cfg->GetInt(arena->cfg, "Team", "PrivFreqStart", 100);
 		int max_freq = cfg->GetInt(arena->cfg, "Team", "MaxFrequency", (priv_freq_start + 2));
 
-		 //Distribute Wealth
 		pd->Lock();
+		FOR_EACH_PLAYER_IN_ARENA(i, arena)
+			if (flagging_freq(arena, i->p_freq))
+				end_playtime(i);
+
+		ticks_t max_playtime = 0;
+		FOR_EACH_PLAYER_IN_ARENA(i, arena)
+			if (flagging_freq(arena, i->p_freq))
+			{
+				char *lower_name = ToLowerStr(astrdup(i->name));
+				ticks_t *playtime = HashGetOne(adata->players_flag_time, lower_name);
+				if (TICK_GT(*playtime, max_playtime))
+					max_playtime = *playtime;
+				afree(lower_name);
+			}
+
+		if (max_playtime == 0)
+			max_playtime = 1;
+
+		//Distribute Wealth    
 		FOR_EACH_PLAYER(i)
 		{
 			if(i->arena == arena && i->p_ship != SHIP_SPEC)
 			{
+				char *lower_name = ToLowerStr(astrdup(i->name));
+				ticks_t *playtime = HashGetOne(adata->players_flag_time, lower_name);				
+				afree(lower_name);
+
+				double time_fraction = 1;
+				if (playtime)
+					time_fraction = HSCR_MIN(*playtime * (*playtime * 0.25) / max_playtime, 1);
+
 				if (i->p_freq == freq) {
 					int exp_reward = adata->max_flag_exp;
 					int hsd_reward = adata->max_flag_money;
@@ -404,8 +479,22 @@ local void flagWinCallback(Arena *arena, int freq, int *pts)
 
 					// exp_reward *= exp_mul;
 					// hsd_reward *= hsd_mul;
+					
+					hsd_reward *= time_fraction;
+					exp_reward *= time_fraction;
 
-					//no need to send message, as the team announcement works just fine
+					if (exp_reward && hsd_reward) {
+						chat->SendMessage(i, "You received $%d and %d exp for a flag win.", hsd_reward, exp_reward);
+
+					} else if (exp_reward) {
+						chat->SendMessage(i, "You received %d exp for a flag win.", exp_reward);
+
+					} else if (hsd_reward) {
+						chat->SendMessage(i, "You received $%d for a flag win.", hsd_reward);
+					} else {
+						chat->SendMessage(i, "You didn't play long enough for a reward.");
+					}
+
 					database->addMoney(i, MONEY_TYPE_FLAG, hsd_reward);
 					database->addExp(i, exp_reward);
 				} else if (i->p_freq >= priv_freq_start && i->p_freq < max_freq) {
@@ -420,6 +509,9 @@ local void flagWinCallback(Arena *arena, int freq, int *pts)
 					// exp_reward *= exp_mul;
 					// hsd_reward *= hsd_mul;
 
+					hsd_reward *= time_fraction;
+					exp_reward *= time_fraction;
+
 					database->addMoney(i, MONEY_TYPE_FLAG, hsd_reward);
 					database->addExp(i, exp_reward);
 
@@ -431,10 +523,21 @@ local void flagWinCallback(Arena *arena, int freq, int *pts)
 
 					} else if (hsd_reward) {
 						chat->SendMessage(i, "You received $%d for a flag loss.", hsd_reward);
+					} else {
+						chat->SendMessage(i, "You didn't play long enough for a reward.");
 					}
 				}
 			}
 		}
+		pd->Unlock();
+
+		HashFree(adata->players_flag_time);
+		adata->players_flag_time = HashAlloc();
+
+		pd->Lock();
+		FOR_EACH_PLAYER_IN_ARENA(i, arena)
+			if (flagging_freq(arena, i->p_freq))
+				begin_playtime(i);				
 		pd->Unlock();
 
 		adata->winning_freq = -1;
@@ -742,6 +845,11 @@ local void shipFreqChangeCallback(Player *p, int newship, int oldship, int newfr
 {
 	PData *pdata = PPDATA(p, pdkey);
 	pdata->periodic_tally = 0;
+
+	if (flagging_freq(p->arena, oldfreq) && !flagging_freq(p->arena, newfreq))
+		end_playtime(p);
+	else if (!flagging_freq(p->arena, oldfreq) && flagging_freq(p->arena, newfreq))
+		begin_playtime(p);
 }
 
 local void paction(Player *p, int action, Arena *arena)
@@ -750,6 +858,8 @@ local void paction(Player *p, int action, Arena *arena)
 	{
 		PData *pdata = PPDATA(p, pdkey);
 		pdata->periodic_tally = 0;
+	} else if (action == PA_LEAVEARENA && flagging_freq(arena, p->p_freq)) {
+		end_playtime(p);
 	}
 }
 
@@ -1263,6 +1373,7 @@ EXPORT int MM_hscore_rewards(int action, Imodman *_mm, Arena *arena)
 		adata->periodic_money_formula = NULL;
 		adata->periodic_exp_formula = NULL;
 		adata->winning_freq = -1;
+		adata->players_flag_time = HashAlloc();
 		get_formulas(arena);
 
 		mm->RegCallback(CB_WARZONEWIN, flagWinCallback, arena);
@@ -1299,6 +1410,7 @@ EXPORT int MM_hscore_rewards(int action, Imodman *_mm, Arena *arena)
 		ml->ClearTimer(flag_reward_timer, arena);
 
 		adata->on = 0;
+		HashFree(adata->players_flag_time);
 		free_formulas(arena);
 
 		return MM_OK;
