@@ -201,7 +201,7 @@ class WZSets:
     # Sets the minimum number of players required on each team (specified by Team:PrivFreqStart and
     # Team:MaxFrequency) to allow flags to be owned. If set and not met, all flags will be placed
     # as neutral flags.
-    me.minplayersperteam = 0 #cfg.GetInt(c, "Flag", "MinPlayersPerTeam", 2)
+    me.minplayersperteam = cfg.GetInt(c, "Flag", "MinPlayersPerTeam", 2)
 
 
 # useful flag things
