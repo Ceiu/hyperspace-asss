@@ -15,6 +15,7 @@ typedef struct {
 } RMArenaData;
 
 typedef struct {
+  char revival_enabled;
   u_int32_t revival_chance;
   ticks_t revival_warmup;
   ticks_t revival_cooldown;
@@ -91,11 +92,13 @@ static void ReadRevivalItemStats(Player *player) {
   RMPlayerData *pdata = PPDATA(player, pdkey);
 
   if (player->p_ship != SHIP_SPEC) {
+    pdata->revival_enabled = items->getPropertySum(player, player->p_ship, "revival_module_enabled", 0);
     pdata->revival_chance = items->getPropertySum(player, player->p_ship, "revival_chance", 0);
     pdata->revival_warmup = items->getPropertySum(player, player->p_ship, "revival_warmup", 0);
     pdata->revival_cooldown = items->getPropertySum(player, player->p_ship, "revival_cooldown", 0);
   }
   else {
+    pdata->revival_enabled = 0;
     pdata->revival_chance = 0;
     pdata->revival_warmup = 0;
     pdata->revival_cooldown = 0;
@@ -192,7 +195,7 @@ static void OnArenaAction(Arena *arena, int action) {
 static void OnPlayerDeath(Arena *arena, Player **killer, Player **killed, int *bounty) {
   RMPlayerData *pdata = PPDATA(*killed, pdkey);
 
-  if (pdata->revival_chance) {
+  if (pdata->revival_enabled && pdata->revival_chance > 0) {
     ticks_t now = current_ticks();
 
     // Check if we've passed the warmup duration
