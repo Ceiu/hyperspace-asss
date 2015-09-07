@@ -6,6 +6,7 @@
 #include "fg_wz.h"
 #include "hscore.h"
 #include <math.h>
+#include <stdlib.h>
 #include <string.h>
 #include "hscore_teamnames.h"
 #include "hscore_shipnames.h"
@@ -421,6 +422,16 @@ local int flag_reward_timer(void *clos)
 	return TRUE;
 }
 
+local inline double scale_time_played(double time_fraction)
+{
+	return 1 / (1 + exp(-10 * (time_fraction - 0.5)));
+}
+
+local inline int tick_compare(const void *t1, const void *t2)
+{
+	return TICK_DIFF(*((ticks_t *) t1), *((ticks_t *) t2));
+}
+
 //This is assuming we're using fg_wz.py
 local void flagWinCallback(Arena *arena, int freq, int *pts)
 {
@@ -460,19 +471,32 @@ local void flagWinCallback(Arena *arena, int freq, int *pts)
 			if (flagging_freq(arena, i->p_freq))
 				end_playtime(i, i->p_freq);
 
-		ticks_t max_playtime = 0;
+		ticks_t q60_playtime = 0; // Mathematically 60th quartile, realistically 80th for small games (< 5)
+		size_t n_flagging = 0;
 		FOR_EACH_PLAYER_IN_ARENA(i, arena)
 			if (flagging_freq(arena, i->p_freq))
-			{
-				char *time_key = playtime_key(i, i->p_freq);
-				ticks_t *playtime = HashGetOne(adata->players_flag_time, time_key);
-				if (TICK_GT(*playtime, max_playtime))
-					max_playtime = *playtime;
-				afree(time_key);
-			}
+				++n_flagging;	
 
-		if (max_playtime == 0)
-			max_playtime = 1;
+		if (n_flagging > 0)
+		{
+			ticks_t *flagging_times = amalloc(sizeof(ticks_t) * n_flagging);
+			int j = 0;
+			FOR_EACH_PLAYER_IN_ARENA(i, arena)
+				if (flagging_freq(arena, i->p_freq))
+				{
+					char *time_key = playtime_key(i, i->p_freq);
+					ticks_t *playtime = HashGetOne(adata->players_flag_time, time_key);								
+					flagging_times[j++] = *playtime;
+					afree(time_key);
+				}
+
+			qsort(flagging_times, n_flagging, sizeof(ticks_t), tick_compare);
+			q60_playtime = flagging_times[n_flagging * 3 / 5];
+			afree(flagging_times);
+		}
+
+		if (q60_playtime == 0)
+			q60_playtime = 1;
 
 		//Distribute Wealth    
 		FOR_EACH_PLAYER(i)
@@ -485,7 +509,7 @@ local void flagWinCallback(Arena *arena, int freq, int *pts)
 
 				double time_fraction = 1;
 				if (playtime)
-					time_fraction = HSCR_MIN(*playtime * 1.3 / max_playtime, 1);
+					time_fraction = scale_time_played(*playtime / ((double) q60_playtime));
 
 				if (i->p_freq == freq) {
 					int exp_reward = adata->max_flag_exp;
@@ -528,9 +552,6 @@ local void flagWinCallback(Arena *arena, int freq, int *pts)
 					// exp_reward *= exp_mul;
 					// hsd_reward *= hsd_mul;
 
-					hsd_reward *= time_fraction;
-					exp_reward *= time_fraction;
-
 					database->addMoney(i, MONEY_TYPE_FLAG, hsd_reward);
 					database->addExp(i, exp_reward);
 
@@ -542,8 +563,6 @@ local void flagWinCallback(Arena *arena, int freq, int *pts)
 
 					} else if (hsd_reward) {
 						chat->SendMessage(i, "You received $%d for a flag loss.", hsd_reward);
-					} else {
-						chat->SendMessage(i, "You didn't play long enough for a reward.");
 					}
 				}
 			}
