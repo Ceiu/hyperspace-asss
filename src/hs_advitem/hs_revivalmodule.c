@@ -54,6 +54,10 @@ static void OnArenaAttach(Arena *arena);
 static void OnArenaDetach(Arena *arena);
 static void OnArenaAction(Arena *arena, int action);
 static void OnPlayerDeath(Arena *arena, Player **killer, Player **killed, int *bounty);
+static void OnPlayerSpawn(Player *player, int reason);
+static void OnPlayerFreqShipChange(Player *player, int newship, int oldship, int newfreq, int oldfreq);
+static void OnPlayerShipsetChange(Player *player, int oldshipset, int newshipset);
+static void OnPlayerItemCountChange(Player *player, ShipHull *hull, Item *item, InventoryEntry *entry, int newCount, int oldCount);
 
 // Interfaces
 static Imodman *mm;
@@ -240,10 +244,6 @@ static void OnPlayerItemCountChange(Player *player, ShipHull *hull, Item *item, 
   ReadRevivalItemStats(player);
 }
 
-static void OnFlagLoss(Arena *a, Player *p, int fid, int how) {
-  lm->Log(L_INFO, "FLAG LOST! Player: %s, Flag: %d, reason; %d", p->name, fid, how);
-}
-
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
 /**
@@ -343,7 +343,6 @@ EXPORT int MM_hs_revivalmodule(int action, Imodman *modman, Arena *arena)
       mm->RegCallback(CB_SPAWN, OnPlayerSpawn, arena);
       mm->RegCallback(CB_SHIPSET_CHANGED, OnPlayerShipsetChange, arena);
       mm->RegCallback(CB_ITEM_COUNT_CHANGED, OnPlayerItemCountChange, arena);
-      mm->RegCallback(CB_FLAGLOST, OnFlagLoss, arena);
 
       mm->RegAdviser(&kill_advisor, arena);
       OnArenaAttach(arena);
@@ -356,7 +355,6 @@ EXPORT int MM_hs_revivalmodule(int action, Imodman *modman, Arena *arena)
       OnArenaDetach(arena);
       mm->UnregAdviser(&kill_advisor, arena);
 
-      mm->UnregCallback(CB_FLAGLOST, OnFlagLoss, arena);
       mm->UnregCallback(CB_ITEM_COUNT_CHANGED, OnPlayerItemCountChange, arena);
       mm->UnregCallback(CB_SHIPSET_CHANGED, OnPlayerShipsetChange, arena);
       mm->UnregCallback(CB_SHIPFREQCHANGE, OnPlayerFreqShipChange, arena);
