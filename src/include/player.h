@@ -174,6 +174,8 @@ struct PlayerPosition
 #define STATUS_SAFEZONE 0x20U
 /** whether the player is a ufo */
 #define STATUS_UFO      0x40U
+/** whether or not the player is idle (not rotating or changing velocity) */
+#define STATUS_IDLE     0x80U
 
 
 /** this struct holds everything we know about a player */
