@@ -471,10 +471,10 @@ local void flagWinCallback(Arena *arena, int freq, int *pts)
 			if (flagging_freq(arena, i->p_freq))
 				end_playtime(i, i->p_freq);
 
-		ticks_t q60_playtime = 0; // Mathematically 60th quartile, realistically 80th for small games (< 5)
+		ticks_t q60_playtime = 1; // Mathematically 60th quartile, realistically 80th for small games (< 5)
 		size_t n_flagging = 0;
 		FOR_EACH_PLAYER_IN_ARENA(i, arena)
-			if (flagging_freq(arena, i->p_freq))
+			if (flagging_freq(arena, i->p_freq) && i->p_freq == freq)
 				++n_flagging;	
 
 		if (n_flagging > 0)
@@ -482,7 +482,7 @@ local void flagWinCallback(Arena *arena, int freq, int *pts)
 			ticks_t *flagging_times = amalloc(sizeof(ticks_t) * n_flagging);
 			int j = 0;
 			FOR_EACH_PLAYER_IN_ARENA(i, arena)
-				if (flagging_freq(arena, i->p_freq))
+				if (flagging_freq(arena, i->p_freq) && i->p_freq == freq)
 				{
 					char *time_key = playtime_key(i, i->p_freq);
 					ticks_t *playtime = HashGetOne(adata->players_flag_time, time_key);								
@@ -495,22 +495,11 @@ local void flagWinCallback(Arena *arena, int freq, int *pts)
 			afree(flagging_times);
 		}
 
-		if (q60_playtime == 0)
-			q60_playtime = 1;
-
 		//Distribute Wealth    
 		FOR_EACH_PLAYER(i)
 		{
 			if(i->arena == arena && i->p_ship != SHIP_SPEC)
 			{
-				char *time_key = playtime_key(i, i->p_freq);
-				ticks_t *playtime = HashGetOne(adata->players_flag_time, time_key);				
-				afree(time_key);
-
-				double time_fraction = 1;
-				if (playtime)
-					time_fraction = scale_time_played(*playtime / ((double) q60_playtime));
-
 				if (i->p_freq == freq) {
 					int exp_reward = adata->max_flag_exp;
 					int hsd_reward = adata->max_flag_money;
@@ -522,18 +511,24 @@ local void flagWinCallback(Arena *arena, int freq, int *pts)
 
 					// exp_reward *= exp_mul;
 					// hsd_reward *= hsd_mul;
+
+					char *time_key = playtime_key(i, i->p_freq);
+					ticks_t *playtime = HashGetOne(adata->players_flag_time, time_key);				
+					afree(time_key);
+
+					double time_fraction = 1;
+					if (playtime)
+						time_fraction = scale_time_played(*playtime / ((double) q60_playtime));
 					
 					hsd_reward *= time_fraction;
 					exp_reward *= time_fraction;
 
 					if (exp_reward && hsd_reward) {
-						chat->SendMessage(i, "You received $%d and %d exp for a flag win.", hsd_reward, exp_reward);
-
+						chat->SendMessage(i, "You received $%d and %d exp for a flag win (%.0f%% of the normalized playing time).", hsd_reward, exp_reward, round(time_fraction * 100));
 					} else if (exp_reward) {
-						chat->SendMessage(i, "You received %d exp for a flag win.", exp_reward);
-
+						chat->SendMessage(i, "You received %d exp for a flag win (%.0f%% of the normalized playing time).", exp_reward, round(time_fraction * 100));
 					} else if (hsd_reward) {
-						chat->SendMessage(i, "You received $%d for a flag win.", hsd_reward);
+						chat->SendMessage(i, "You received $%d for a flag win (%.0f%% of the normalized playing time).", hsd_reward, round(time_fraction * 100));
 					} else {
 						chat->SendMessage(i, "You didn't play long enough for a reward.");
 					}
