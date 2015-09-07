@@ -76,6 +76,25 @@ local void edit_death(Arena *arena, Player **killer, Player **killed, int *bount
     if (adata->attached && adata->killer) {
         if (*killer == kill->GetKillerPlayer(adata->killer)) {
             /* Swap the fake player with the suiciding player */
+            if (flag->CountPlayerFlags(p) > 0) {
+                Iflaggame *fgame = mm->GetInterface(I_FLAGGAME, arena);
+
+                if (fgame) {
+                    int num_flags = flag->CountFlags(arena);
+                    FlagInfo fis[num_flags];
+
+                    flag->GetFlags(arena, 0, fis, num_flags);
+
+                    for (int i = 0; i < num_flags; i++) {
+                        /* Only neut the flags the player was carrying */
+                        if (fis[i].carrier == p)
+                            fgame->Cleanup(arena, i, CLEANUP_KILL_CANTCARRY, p, p->p_freq);
+                    }
+
+                    mm->ReleaseInterface(fgame);
+                }
+            }
+
             *killer = *killed;
         }
     }
