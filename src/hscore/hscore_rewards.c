@@ -485,7 +485,7 @@ local void flagWinCallback(Arena *arena, int freq, int *pts)
 
 				double time_fraction = 1;
 				if (playtime)
-					time_fraction = HSCR_MIN(*playtime * (*playtime * 0.05) / max_playtime, 1);
+					time_fraction = HSCR_MIN(*playtime * 1.3 / max_playtime, 1);
 
 				if (i->p_freq == freq) {
 					int exp_reward = adata->max_flag_exp;
