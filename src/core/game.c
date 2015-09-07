@@ -1716,6 +1716,7 @@ local void ShipReset(const Target *target)
 		if (p->flags.is_dead)
 		{
 			p->flags.is_dead = 0;
+			p->next_respawn = current_ticks();
 			flags |= SPAWN_AFTERDEATH;
 		}
 		DO_CBS(CB_SPAWN, p->arena, SpawnFunc, (p, flags));
