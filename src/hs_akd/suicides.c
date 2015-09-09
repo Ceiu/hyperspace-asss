@@ -75,7 +75,7 @@ local void edit_death(Arena *arena, Player **killer, Player **killed, int *bount
 
     if (adata->attached && adata->killer) {
         if (*killer == kill->GetKillerPlayer(adata->killer)) {
-            /* Neut the flags if the player kills himself while carrying flags */
+            /* Swap the fake player with the suiciding player */
             if (flag->CountPlayerFlags(p) > 0) {
                 Iflaggame *fgame = mm->GetInterface(I_FLAGGAME, arena);
 
@@ -95,7 +95,6 @@ local void edit_death(Arena *arena, Player **killer, Player **killed, int *bount
                 }
             }
 
-            /* Swap the fake player with the suiciding player */
             *killer = *killed;
         }
     }
