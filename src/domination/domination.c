@@ -59,6 +59,11 @@
 // - Deal with synchronization issues. Lots of timers and junk here, which likely means lots of
 //   threads. Need locks all over the place in here.
 
+// Immediate TODO:
+// - Finish the game end stuff (game state change, clear game timers, do callbacks, prepare next game)
+// - Do game start condition checks
+// - Do game abort events (player counts)
+
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 // Global Definitions
 ////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -94,6 +99,7 @@ struct DomArena {
 
   u_int32_t cfg_team_count;
   u_int32_t cfg_region_count;
+  u_int32_t cfg_domination_countdown;
   u_int32_t cfg_min_players;
   u_int32_t cfg_min_players_per_team;
   u_int32_t cfg_game_duration;
@@ -186,7 +192,7 @@ static Iplayerdata *pd;
 
 // Global resource identifiers
 static int adkey;
-static int pdkey;
+// static int pdkey;
 
 
 
@@ -209,6 +215,7 @@ static int LoadTeamData(Arena *arena);
 static void FreeTeam(DomTeam *dteam);
 static void FreeTeamData(Arena *arena);
 static int ReadArenaConfig(Arena *arena);
+
 static DomFlag* GetDomFlag(Arena *arena, int flag_id);
 static DomTeam* GetDomTeam(Arena *arena, int freq);
 static DomRegion* GetDomRegion(Arena *arena, const char *region_name);
@@ -221,14 +228,20 @@ static DomTeam* GetFlagEntityControllingTeam(DomFlag *dflag);
 static DomFlagState GetFlagState(DomFlag *dflag);
 static void SetFlagState(DomFlag *dflag, DomFlagState state, DomTeam *controlling_team, int acquired_influence, DomTeam *flag_entity_team);
 static int GetTeamRegionInfluence(DomTeam *dteam, DomRegion *dregion);
+static int GetTeamAcquiredRegionInfluence(DomTeam *dteam, DomRegion *dregion);
+static int GetTeamAcquiredControlPoints(DomTeam *dteam);
 static int GetRegionProvidedControlPoints(DomRegion *dregion);
 static int GetRegionRequiredInfluence(DomRegion *dregion);
-static int GetTeamAcquiredRegionInfluence(DomTeam *dteam, DomRegion *dregion);
+static int GetRegionPotentialInfluence(DomRegion *dregion);
+static int GetRegionMinimumInfluence(DomRegion *dregion);
 static DomTeam* GetRegionControllingTeam(DomRegion *dregion);
 static DomTeam* GetRegionInfluentialTeam(DomRegion *dregion);
 static DomRegionState GetRegionState(DomRegion *dregion);
 static void SetRegionState(DomRegion *dregion, DomRegionState state, DomTeam *dteam, int influence);
 static char* GetTeamName(DomTeam *dteam);
+static DomTeam* GetDominatingTeam(Arena *arena);
+
+static void SetAlertState(Arena *arena, DomAlertType type, char enabled, ticks_t duration);
 static void UpdateFlagAcquiredInfluence(DomFlag *dflag);
 static void UpdateRegionAcquiredInfluence(DomRegion *dregion);
 static void ClearFlagTimers(DomFlag *dflag);
@@ -236,6 +249,8 @@ static void ClearRegionTimers(DomRegion *dregion);
 static void ClearGameTimers(Arena *arena);
 static int UpdateFlagStateTimer(void *param);
 static void UpdateFlagState(Arena *arena);
+static void UpdateDominationState(Arena *arena);
+
 static void OnArenaAttach(Arena *arena);
 static void OnArenaDetach(Arena *arena);
 static void OnArenaAction(Arena *arena, int action);
@@ -247,6 +262,7 @@ static int OnFlagFullCaptureTimer(void *param);
 static void OnFlagStateChange(Arena *arena, DomFlag *dflag, DomFlagState prev_state, DomFlagState new_state);
 static int OnRegionHalfCaptureTimer(void *param);
 static int OnRegionFullCaptureTimer(void *param);
+static int OnRegionNeutralizeTimer(void *param);
 static void OnRegionStateChange(Arena *arena, DomRegion *dregion, DomRegionState prev_state, DomRegionState new_state);
 static void OnFlagCleanup(Arena *arena, int flag_id, int reason, Player *carrier, int freq);
 static void OnFlagReset(Arena *arena, int freq, int points);
@@ -257,7 +273,6 @@ static void OnPlayerAction(Player *player, int action, Arena *arena);
 static void OnPlayerDeath(Arena *arena, Player *killer, Player *killed, int bounty, int flags, int *pts, int *green);
 static void OnPlayerSpawn(Player *player, int reason);
 static void OnPlayerFreqShipChange(Player *player, int newship, int oldship, int newfreq, int oldfreq);
-
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -555,7 +570,7 @@ static int LoadFlagData(Arena *arena) {
         dflag->y = y;
 
         /* cfghelp: Domination:Flag1-Influence, arena, int,
-         * The amount of influence this flag is worth. */
+         * The amount of influence flag provides to its containing regions */
         sprintf(cfg_key, "Flag%d-%s", (dflag->flag_id + 1), "Influence");
         dflag->cfg_flag_influence = cfg->GetInt(arena->cfg, "Domination", cfg_key, 1);
 
@@ -776,6 +791,12 @@ static int ReadArenaConfig(Arena *arena) {
    * The number of regions to contested as part of the game. Each region will need to be configured
    * with the Domination.Region#-* settings. */
   adata->cfg_region_count = DOM_CLAMP(cfg->GetInt(arena->cfg, "Domination", "RegionCount", 1), 1, 255);
+
+  /* cfghelp: Domination:DominationCountdown, arena, int, def: 600
+   * The amount of time in centiseconds a team must control all regions to complete the domination
+   * win condition. If set to zero or a negative value, the game will end as soon as a team controls
+   * the final region. */
+  adata->cfg_domination_countdown = DOM_MAX(cfg->GetInt(arena->cfg, "Domination", "DominationCountdown", 600), 0);
 
   /* cfghelp: Domination:MinimumPlayers, arena, int, def: 3
    * The minimum number of active players in the arena required to start a new game. If set to zero,
@@ -1053,8 +1074,8 @@ static void SetFlagState(DomFlag *dflag, DomFlagState state, DomTeam *controllin
   UpdateFlagState(dflag->arena);
 
 
-  chat->SendArenaMessage(dflag->arena, "Flag state update! Flag: %d, State: %d, team: %d, influence: %d, flag owner: %d",
-    dflag->flag_id, dflag->state, (dflag->controlling_team ? dflag->controlling_team->cfg_team_freq : -1), dflag->acquired_influence, (dflag->flag_team ? dflag->flag_team->cfg_team_freq : -1)
+  chat->SendArenaMessage(dflag->arena, "%d: Flag state update! Flag: %d, State: %d, team: %d, influence: %d, flag owner: %d",
+    current_ticks() / 100, dflag->flag_id, dflag->state, (dflag->controlling_team ? dflag->controlling_team->cfg_team_freq : -1), dflag->acquired_influence, (dflag->flag_team ? dflag->flag_team->cfg_team_freq : -1)
   );
 
 
@@ -1087,7 +1108,7 @@ static void SetFlagState(DomFlag *dflag, DomFlagState state, DomTeam *controllin
 
     // Do callbacks. Note that we always call ours last to give plugins a chance to process the
     // event before we go on changing other stuff (regions)
-    DO_CBS(CB_DOM_FLAG_STATE_CHANGED, dflag->arena, DomFlagStateChangeFunc, (dflag->arena, dflag, pstate, dflag->state));
+    DO_CBS(CB_DOM_FLAG_STATE_CHANGED, dflag->arena, DomFlagStateChangedFunc, (dflag->arena, dflag, pstate, dflag->state));
     OnFlagStateChange(dflag->arena, dflag, pstate, dflag->state);
   }
 }
@@ -1109,7 +1130,6 @@ static int GetTeamRegionInfluence(DomTeam *dteam, DomRegion *dregion) {
   Link *link;
   char *key;
 
-
   keys = HashGetKeys(&dregion->flags);
   FOR_EACH(keys, key, link) {
     DomFlag *dflag = HashGetOne(&dregion->flags, key);
@@ -1126,8 +1146,50 @@ static int GetTeamRegionInfluence(DomTeam *dteam, DomRegion *dregion) {
     }
   }
 
-
   return influence;
+}
+
+static int GetTeamAcquiredRegionInfluence(DomTeam *dteam, DomRegion *dregion) {
+  if (!dteam) {
+    lm->Log(L_ERROR, "<%s> ERROR: GetTeamAcquiredRegionInfluence called with a null dteam parameter", DOM_MODULE_NAME);
+    return -1;
+  }
+
+  if (!dregion) {
+    lm->Log(L_ERROR, "<%s> ERROR: GetTeamAcquiredRegionInfluence called with a null dregion parameter", DOM_MODULE_NAME);
+    return -1;
+  }
+
+  UpdateRegionAcquiredInfluence(dregion);
+
+  return dregion->controlling_team == dteam ? dregion->acquired_influence : 0;
+}
+
+static int GetTeamAcquiredControlPoints(DomTeam *dteam) {
+  if (!dteam) {
+    lm->Log(L_ERROR, "<%s> ERROR: GetTeamAcquiredRegionInfluence called with a null dteam parameter", DOM_MODULE_NAME);
+    return -1;
+  }
+
+  DomArena *adata = P_ARENA_DATA(dteam->arena, adkey);
+
+  LinkedList *keys;
+  Link *link;
+  char *key;
+
+  int control_points = 0;
+
+  if (adata->regions_initialized) {
+    keys = HashGetKeys(&adata->regions);
+    FOR_EACH(keys, key, link) {
+      DomRegion *dregion = HashGetOne(&adata->regions, key);
+      if (dregion && GetRegionState(dregion) == DOM_REGION_STATE_CONTROLLED && GetRegionControllingTeam(dregion) == dteam) {
+        control_points = GetRegionProvidedControlPoints(dregion);
+      }
+    }
+  }
+
+  return control_points;
 }
 
 static int GetRegionProvidedControlPoints(DomRegion *dregion) {
@@ -1169,22 +1231,6 @@ static int GetRegionPotentialInfluence(DomRegion *dregion) {
   }
 
   return potential_influence;
-}
-
-static int GetTeamAcquiredRegionInfluence(DomTeam *dteam, DomRegion *dregion) {
-  if (!dteam) {
-    lm->Log(L_ERROR, "<%s> ERROR: GetTeamAcquiredRegionInfluence called with a null dteam parameter", DOM_MODULE_NAME);
-    return -1;
-  }
-
-  if (!dregion) {
-    lm->Log(L_ERROR, "<%s> ERROR: GetTeamAcquiredRegionInfluence called with a null dregion parameter", DOM_MODULE_NAME);
-    return -1;
-  }
-
-  UpdateRegionAcquiredInfluence(dregion);
-
-  return dregion->controlling_team == dteam ? dregion->acquired_influence : 0;
 }
 
 static DomTeam* GetRegionControllingTeam(DomRegion *dregion) {
@@ -1282,49 +1328,71 @@ static void SetRegionState(DomRegion *dregion, DomRegionState state, DomTeam *co
   DomRegionState pstate = dregion->state;
   acquired_influence = DOM_CLAMP(acquired_influence, 0, required_influence);
 
-  int change = (dregion->state != state) ||
-    (dregion->controlling_team != controlling_team) ||
-    (dregion->acquired_influence != acquired_influence);
-
   dregion->state = state;
   dregion->controlling_team = controlling_team;
   dregion->acquired_influence = acquired_influence;
 
-  chat->SendArenaMessage(dregion->arena, "Region state update! Region: %d, State: %d, team: %d, influence: %d",
-    dregion->region_id, dregion->state, (dregion->controlling_team ? dregion->controlling_team->cfg_team_freq : -1), dregion->acquired_influence
+
+  DomTeam *iteam = GetRegionInfluentialTeam(dregion);
+  chat->SendArenaMessage(dregion->arena, "=== %d: Region state update! Region: %d, State: %d, team: %d, influence: %d, iteam: %d",
+    current_ticks() / 100, dregion->region_id, dregion->state, (dregion->controlling_team ? dregion->controlling_team->cfg_team_freq : -1), dregion->acquired_influence, (iteam ? iteam->cfg_team_freq : -1)
   );
 
+  // Cancel existing flag timers for the given flag
+  ClearRegionTimers(dregion);
+  DomTeam *influential_team = GetRegionInfluentialTeam(dregion);
 
-  if (change) {
-    // Cancel existing flag timers for the given flag
-    ClearRegionTimers(dregion);
-    DomTeam *influential_team = GetRegionInfluentialTeam(dregion);
+  // If the flag is now in a transitional state (contested/capturing), set a new timer to trigger
+  // the next state change
+  switch (dregion->state) {
+    case DOM_REGION_STATE_CAPTURING:
+      dregion->last_influence_update = current_ticks();
+      if (dregion->controlling_team && dregion->controlling_team == influential_team) {
+        // Begin capture for controlling team; end in CONTROLLED state with max influence
+        int remaining_influence = (required_influence - dregion->acquired_influence);
+        int region_influence = GetTeamRegionInfluence(dregion->controlling_team, dregion);
 
-    // If the flag is now in a transitional state (contested/capturing), set a new timer to trigger
-    // the next state change
-    switch (dregion->state) {
-      case DOM_REGION_STATE_CAPTURING:
-        dregion->last_influence_update = current_ticks();
-        if (dregion->controlling_team == influential_team) {
-          // Begin capture for flag team; end in CONTROLLED state with max influence
-          mainloop->SetTimer(OnRegionFullCaptureTimer, (required_influence - dregion->acquired_influence), 0, dregion, dregion);
+        int ticks = remaining_influence / region_influence;
+        if (remaining_influence % region_influence) {
+          ++ticks;
         }
-        else {
-          // Begin capture for flag team; end in CAPTURING state with 0 influence
-          mainloop->SetTimer(OnRegionHalfCaptureTimer, dregion->acquired_influence, 0, dregion, dregion);
+
+        mainloop->SetTimer(OnRegionFullCaptureTimer, ticks * DOM_TICK_DURATION, 0, dregion, dregion);
+      }
+      else if (influential_team) {
+        int region_influence = GetTeamRegionInfluence(influential_team, dregion);
+
+        int ticks = dregion->acquired_influence / region_influence;
+        if (dregion->acquired_influence % region_influence) {
+          ++ticks;
         }
-        break;
 
-      default:
-        dregion->last_influence_update = 0;
-        break;
-    }
+        // Begin capture for influential team; end in CAPTURING state with 0 influence
+        mainloop->SetTimer(OnRegionHalfCaptureTimer, ticks * DOM_TICK_DURATION, 0, dregion, dregion);
+      }
+      else {
+        int region_influence = GetRegionPotentialInfluence(dregion);
 
-    // Do callbacks. Note that we always call ours last to give plugins a chance to process the
-    // event before we go on changing other stuff (regions)
-    DO_CBS(CB_DOM_REGION_STATE_CHANGED, dregion->arena, DomRegionStateChangeFunc, (dregion->arena, dregion, pstate, dregion->state));
-    OnRegionStateChange(dregion->arena, dregion, pstate, dregion->state);
+        int ticks = dregion->acquired_influence / region_influence;
+        if (dregion->acquired_influence % region_influence) {
+          ++ticks;
+        }
+
+        // Begin reverting region to neutral; end in NEUTRAL state with 0 influence
+        mainloop->SetTimer(OnRegionNeutralizeTimer, ticks * DOM_TICK_DURATION, 0, dregion, dregion);
+      }
+
+      break;
+
+    default:
+      dregion->last_influence_update = 0;
+      break;
   }
+
+  // Do callbacks. Note that we always call ours last to give plugins a chance to process the
+  // event before we go on changing other stuff (regions)
+  DO_CBS(CB_DOM_REGION_STATE_CHANGED, dregion->arena, DomRegionStateChangedFunc, (dregion->arena, dregion, pstate, dregion->state));
+  OnRegionStateChange(dregion->arena, dregion, pstate, dregion->state);
 }
 
 static char* GetTeamName(DomTeam *dteam) {
@@ -1336,7 +1404,52 @@ static char* GetTeamName(DomTeam *dteam) {
   return dteam->team_name;
 }
 
+static DomTeam* GetDominatingTeam(Arena *arena) {
+  if (!arena) {
+    lm->Log(L_ERROR, "<%s> ERROR: GetDominatingTeam called with a null arena parameter", DOM_MODULE_NAME);
+    return NULL;
+  }
+
+  DomArena *adata = P_ARENA_DATA(dregion->arena, adkey);
+
+  DomTeam *dteam = NULL;
+  LinkedList *keys;
+  Link *link;
+  char *key;
+
+  if (adata->regions_initialized) {
+    keys = HashGetKeys(&adata->regions);
+    FOR_EACH(keys, key, link) {
+      DomRegion *dregion = HashGetOne(&adata->regions, key);
+      if (dregion) {
+        if (GetRegionState(dregion) != DOM_REGION_STATE_CONTROLLED) {
+          return NULL;
+        }
+
+        DomTeam *cteam = GetRegionControllingTeam(dregion);
+        if (!cteam || (dteam != null && dteam != cteam)) {
+          return NULL;
+        }
+
+        dteam = cteam;
+      }
+    }
+  }
+
+  return dteam;
+}
+
 ////////////////////////////////////////////////////////////////////////////////////////////////////
+
+static void SetAlertState(Arena *arena, DomAlertType type, char enabled, ticks_t duration) {
+  if (!arena) {
+    lm->Log(L_ERROR, "<%s> ERROR: SetAlertState called with a null arena parameter", DOM_MODULE_NAME);
+    return NULL;
+  }
+
+  // Do we need to do anything fancy here...?
+  DO_CBS(CB_DOM_ALERT, arena, DomAlertFunc, (arena, type, enabled, duration));
+}
 
 static void UpdateFlagAcquiredInfluence(DomFlag *dflag) {
   if (dflag->last_influence_update) {
@@ -1354,11 +1467,9 @@ static void UpdateFlagAcquiredInfluence(DomFlag *dflag) {
 
       case DOM_FLAG_STATE_CAPTURING:
         if (dflag->controlling_team == dflag->flag_team) {
-          chat->SendArenaMessage(dflag->arena, "UPDATING FLAG INFLUENCE -- Flag owned by controller; adding %d influence", elapsed);
           dflag->acquired_influence += elapsed;
         }
         else {
-          chat->SendArenaMessage(dflag->arena, "UPDATING FLAG INFLUENCE -- Flag owned by enemy; subtracting %d influence", elapsed);
           dflag->acquired_influence -= elapsed;
         }
 
@@ -1383,20 +1494,11 @@ static void UpdateRegionAcquiredInfluence(DomRegion *dregion) {
 
     if (adata->teams_initialized) {
       DomTeam *cteam = GetRegionControllingTeam(dregion);
-      DomTeam *iteam = GetRegionInfluentialTeam(dregion);
-      int influence = cteam ? GetTeamRegionInfluence(cteam, dregion) : 0;
-      int potential_influence = GetRegionPotentialInfluence(dregion);
+      int influence = cteam ? GetTeamRegionInfluence(cteam, dregion) : -1 * GetRegionPotentialInfluence(dregion);
 
       switch (dregion->state) {
         case DOM_REGION_STATE_CAPTURING:
-          if (cteam && cteam == iteam) {
-            chat->SendArenaMessage(dregion->arena, "UPDATING FLAG INFLUENCE -- Region owned by controller; adding %d influence", (influence * ticks));
-            dregion->acquired_influence += (influence * ticks);
-          }
-          else {
-            chat->SendArenaMessage(dregion->arena, "UPDATING FLAG INFLUENCE -- Flag owned by enemy; subtracting %d influence", (potential_influence - influence) * ticks);
-            dregion->acquired_influence -= ((influence - potential_influence) * ticks);
-          }
+          dregion->acquired_influence += (influence * ticks);
 
           // Clamp the value
           dregion->acquired_influence = DOM_CLAMP(dregion->acquired_influence, 0, required_influence);
@@ -1423,6 +1525,7 @@ static void ClearFlagTimers(DomFlag *dflag) {
 static void ClearRegionTimers(DomRegion *dregion) {
   mainloop->ClearTimer(OnRegionHalfCaptureTimer, dregion);
   mainloop->ClearTimer(OnRegionFullCaptureTimer, dregion);
+  mainloop->ClearTimer(OnRegionNeutralizeTimer, dregion);
 }
 
 static void ClearGameTimers(Arena *arena) {
@@ -1453,6 +1556,7 @@ static void ClearGameTimers(Arena *arena) {
   }
 
   // Clear any global game timers (domination timer...?)
+  mainloop->ClearTimer(OnDominationTimer, adata);
 }
 
 static int UpdateFlagStateTimer(void *param) {
@@ -1474,13 +1578,24 @@ static void UpdateFlagState(Arena *arena) {
   }
 }
 
+static void UpdateDominationState(Arena *arena) {
+  DomArena *adata = P_ARENA_DATA(arena, adkey);
+
+  if (GetDominatingTeam(arena)) {
+    SetAlertState(arena, DOM_ALERT_DOMINATING, 1, adata->cfg_domination_countdown);
+    mainloop->SetTimer(OnDominationTimer, adata->cfg_domination_countdown, 0, adata, adata);
+  }
+  else {
+    SetAlertState(arena, DOM_ALERT_DOMINATING, 0, 0);
+    mainloop->ClearTimer(OnDominationTimer, adata);
+  }
+}
+
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
 static void OnArenaAttach(Arena *arena) {
   // Initialize arena data
   InitArenaData(arena);
-
-  lm->LogA(DOM_DEBUG, DOM_MODULE_NAME, arena, "OnArenaAttach");
 }
 
 static void OnArenaDetach(Arena *arena) {
@@ -1489,8 +1604,6 @@ static void OnArenaDetach(Arena *arena) {
 }
 
 static void OnArenaAction(Arena *arena, int action) {
-  lm->LogA(DOM_DEBUG, DOM_MODULE_NAME, arena, "OnArenaAction");
-
   switch (action) {
     case AA_CONFCHANGED:
       ReadArenaConfig(arena);
@@ -1499,8 +1612,6 @@ static void OnArenaAction(Arena *arena, int action) {
 }
 
 static void OnFlagGameInit(Arena *arena) {
-  lm->LogA(DOM_DEBUG, DOM_MODULE_NAME, arena, "OnFlagGameInit");
-
   flagcore->SetCarryMode(arena, CARRY_NONE);
   lm->LogA(L_DRIVEL, DOM_MODULE_NAME, arena, "Flag carry mode set to CARRY_NONE");
 
@@ -1517,9 +1628,6 @@ static void OnFlagGameInit(Arena *arena) {
 
   ReadArenaConfig(arena);
 }
-
-
-
 
 
 
@@ -1609,10 +1717,6 @@ static void OnFlagStateChange(Arena *arena, DomFlag *dflag, DomFlagState prev_st
         int acquired_influence = cteam ? GetTeamAcquiredRegionInfluence(cteam, dregion) : 0;
         int required_influence = GetRegionRequiredInfluence(dregion);
 
-        chat->SendArenaMessage(dflag->arena, "Region state will change. Controlling team: %d (influence: %d/%d), Influential team: %d",
-          (cteam ? cteam->cfg_team_freq : -1), acquired_influence, required_influence, (iteam ? iteam->cfg_team_freq : -1)
-        );
-
         if (cteam) {
           if (cteam == iteam) {
             if (acquired_influence >= required_influence) {
@@ -1646,8 +1750,7 @@ static void OnFlagStateChange(Arena *arena, DomFlag *dflag, DomFlagState prev_st
         }
         else {
           if (iteam) {
-            // Neutral region without a controller -- give it to the new team in the CAPTURING
-            // statel
+            // Neutral region without a controller -- give it to the new team in the CAPTURING state
             SetRegionState(dregion, DOM_REGION_STATE_CAPTURING, iteam, 0);
           }
           else {
@@ -1684,18 +1787,28 @@ static int OnRegionFullCaptureTimer(void *param) {
   return 0;
 }
 
+static int OnRegionNeutralizeTimer(void *param) {
+  DomRegion *dregion = (DomRegion*) param;
 
-static void OnRegionStateChange(Arena *arena, DomRegion *dregion, DomRegionState prev_state, DomRegionState new_state) {
-  // Check if we need to set the domination timer
+  SetRegionState(dregion, DOM_REGION_STATE_NEUTRAL, NULL, 0);
+
+  return 0;
 }
 
-
-
-
-
-
-
-
+static void OnRegionStateChange(Arena *arena, DomRegion *dregion, DomRegionState prev_state, DomRegionState new_state) {
+  // We don't care if
+  if (old_state != new_state) {
+    // Check if we need to set the domination timer
+    if (new_state == DOM_REGION_STATE_CONTROLLED) {
+      // Set timer/alert
+      UpdateDominationState(arena);
+    }
+    else if (old_state == DOM_REGION_STATE_CONTROLLED) {
+      // Clear timer/alert
+      UpdateDominationState(arena);
+    }
+  }
+}
 
 static void OnFlagCleanup(Arena *arena, int flag_id, int reason, Player *carrier, int freq) {
   chat->SendArenaMessage(arena, "Flag cleanup! Flag: %d, reason: %d, Freq: %d Player: %s", flag_id, reason, freq, carrier->name);
@@ -1718,14 +1831,18 @@ static void OnGameStateChange(Arena *arena, DomGameState old_state, DomGameState
   // Not sure what to do here quite yet
 }
 
-
-
-
-
-
 static int OnDominationTimer(void *param) {
+  DomArena *adata = (DomArena*) param;
+
   // Dominating team wins
-  // Set game state to FINISHED
+  DomTeam *dteam = GetDominatingTeam(adata->arena);
+  if (dteam) {
+
+
+  }
+  else {
+    lm->LogA(L_ERROR, DOM_MODULE_NAME, arena, "Domination event triggered, but no team appears to be dominating");
+  }
 
   return 0;
 }
@@ -1778,7 +1895,32 @@ static Iflaggame flagcore_flaggame_interface = {
   OnFlagCleanup
 };
 
+static Idomination domination_interface = {
+  INTERFACE_HEAD_INIT(I_DOMINATION, DOM_MODULE_NAME "-iface")
 
+  GetDomFlag,
+  GetDomTeam,
+  GetDomRegion,
+  GetFlagProvidedInfluence,
+  GetFlagContestTime,
+  GetFlagCaptureTime,
+  GetFlagAcquiredInfluence,
+  GetFlagControllingTeam,
+  GetFlagEntityControllingTeam,
+  GetFlagState,
+  SetFlagState,
+  GetTeamRegionInfluence,
+  GetRegionProvidedControlPoints,
+  GetRegionRequiredInfluence,
+  GetRegionPotentialInfluence,
+  GetRegionMinimumInfluence,
+  GetTeamAcquiredRegionInfluence,
+  GetRegionControllingTeam,
+  GetRegionInfluentialTeam,
+  GetRegionState,
+  SetRegionState,
+  GetTeamName,
+};
 
 /**
  * Attempts to get the interfaces required by this module. Will not retrieve interfaces twice.
@@ -1862,12 +2004,16 @@ EXPORT int MM_domination(int action, Imodman *modman, Arena *arena)
       //   ReleaseInterfaces();
       //   break;
       // }
+
+      mm->RegInterface(&domination_interface, ALLARENAS);
+
       return MM_OK;
 
     //////////////////////////////////////////////////
 
     case MM_ATTACH:
       mm->RegCallback(CB_ARENAACTION, OnArenaAction, arena);
+      mm->RegCallback(CB_FLAGRESET, OnFlagReset, arena);
 
       mm->RegInterface(&flagcore_flaggame_interface, arena);
 
@@ -1882,6 +2028,7 @@ EXPORT int MM_domination(int action, Imodman *modman, Arena *arena)
 
       mm->UnregInterface(&flagcore_flaggame_interface, arena);
 
+      mm->UnregCallback(CB_FLAGRESET, OnFlagReset, arena);
       mm->UnregCallback(CB_ARENAACTION, OnArenaAction, arena);
 
       return MM_OK;
@@ -1889,6 +2036,10 @@ EXPORT int MM_domination(int action, Imodman *modman, Arena *arena)
     //////////////////////////////////////////////////
 
     case MM_UNLOAD:
+      if (mm->UnregInterface(&domination_interface, ALLARENAS)) {
+        return MM_FAIL;
+      }
+
       arenaman->FreeArenaData(adkey);
       // pd->FreePlayerData(pdkey);
 

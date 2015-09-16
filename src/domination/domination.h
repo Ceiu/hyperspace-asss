@@ -38,9 +38,6 @@ typedef enum {
   /* Region is being captured by a team */
   DOM_REGION_STATE_CAPTURING,
 
-  /* Region is contested, but all contesting teams have an equal amount of influence */
-  DOM_REGION_STATE_CONTESTED,
-
   /* Region is fully controlled by a single team */
   DOM_REGION_STATE_CONTROLLED
 
@@ -64,6 +61,12 @@ typedef enum {
 
 } DomFlagState;
 
+typedef enum {
+  /* A team has controlled every region and will win shortly if uncontested */
+  DOM_ALERT_DOMINATION
+
+} DomAlertType;
+
 typedef struct DomArena DomArena;
 typedef struct DomTeam DomTeam;
 typedef struct DomPlayer DomPlayer;
@@ -73,17 +76,70 @@ typedef struct DomFlag DomFlag;
 
 // Callbacks
 /**
+ * Called when the game is changing states
+ */
+#define CB_DOM_GAME_STATE_CHANGED "dom_game_state_changed-cb-1"
+typedef void (*DomGameStateChangedFunc)(Arena *arena, DomGameState prev_state, DomGameState new_state);
+
+/**
  * Called when a region is changing states
  */
-#define CB_DOM_REGION_STATE_CHANGED "dom_flag_region_changed-1"
-typedef void (*DomRegionStateChangeFunc)(Arena *arena, DomRegion *dregion, DomRegionState prev_state, DomRegionState new_state);
+#define CB_DOM_REGION_STATE_CHANGED "dom_region_state_changed-cb-1"
+typedef void (*DomRegionStateChangedFunc)(Arena *arena, DomRegion *dregion, DomRegionState prev_state, DomRegionState new_state);
 
 /**
  * Called when a flag is changing states
  */
-#define CB_DOM_FLAG_STATE_CHANGED "dom_flag_state_changed-1"
-typedef void (*DomFlagStateChangeFunc)(Arena *arena, DomFlag *dflag, DomFlagState prev_state, DomFlagState new_state);
+#define CB_DOM_FLAG_STATE_CHANGED "dom_flag_state_changed-cb-1"
+typedef void (*DomFlagStateChangedFunc)(Arena *arena, DomFlag *dflag, DomFlagState prev_state, DomFlagState new_state);
+
+/**
+ * Called when a Domination game alert is triggered or is cleared
+ *
+ * @param *arena
+ *  The arena in which the alert occurred
+ *
+ * @param type
+ *  The alert type
+ *
+ * @param enabled
+ *  Whether or not the alert is being set or cleared
+ *
+ * @param duration
+ *  The duration of the alert, in ticks; will be zero when clearing alerts or when setting an alert
+ *  which does not persist
+ */
+#define CB_DOM_ALERT
+typedef void (*DomAlertFunc)(Arena *arena, DomAlertType type, char enabled, ticks_t duration);
 
 
+// Interface
+#define I_DOMINATION "domination-iface-1"
+typedef struct Idomination {
+  INTERFACE_HEAD_DECL
+
+  DomFlag* (*GetDomFlag)(Arena *arena, int flag_id);
+  DomTeam* (*GetDomTeam)(Arena *arena, int freq);
+  DomRegion* (*GetDomRegion)(Arena *arena, const char *region_name);
+  int (*GetFlagProvidedInfluence)(DomFlag *dflag);
+  int (*GetFlagContestTime)(DomFlag *dflag);
+  int (*GetFlagCaptureTime)(DomFlag *dflag);
+  int (*GetFlagAcquiredInfluence)(DomFlag *dflag, DomTeam *dteam);
+  DomTeam* (*GetFlagControllingTeam)(DomFlag *dflag);
+  DomTeam* (*GetFlagEntityControllingTeam)(DomFlag *dflag);
+  DomFlagState (*GetFlagState)(DomFlag *dflag);
+  void (*SetFlagState)(DomFlag *dflag, DomFlagState state, DomTeam *controlling_team, int acquired_influence, DomTeam *flag_entity_team);
+  int (*GetTeamRegionInfluence)(DomTeam *dteam, DomRegion *dregion);
+  int (*GetRegionProvidedControlPoints)(DomRegion *dregion);
+  int (*GetRegionRequiredInfluence)(DomRegion *dregion);
+  int (*GetRegionPotentialInfluence)(DomRegion *dregion);
+  int (*GetRegionMinimumInfluence)(DomRegion *dregion);
+  int (*GetTeamAcquiredRegionInfluence)(DomTeam *dteam, DomRegion *dregion);
+  DomTeam* (*GetRegionControllingTeam)(DomRegion *dregion);
+  DomTeam* (*GetRegionInfluentialTeam)(DomRegion *dregion);
+  DomRegionState (*GetRegionState)(DomRegion *dregion);
+  void (*SetRegionState)(DomRegion *dregion, DomRegionState state, DomTeam *dteam, int influence);
+  char* (*GetTeamName)(DomTeam *dteam);
+} Idomination;
 
 #endif
