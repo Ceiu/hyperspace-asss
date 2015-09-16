@@ -32,7 +32,7 @@ local Ireldb *db;
 "  ip int(10) unsigned NOT NULL default '0'," \
 "  macid int(10) unsigned NOT NULL default '0'," \
 "  permid int(10) unsigned NOT NULL default '0'," \
-"  lastseen timestamp(14) NOT NULL," \
+"  lastseen timestamp NOT NULL," \
 "  UNIQUE KEY unq_idx (name,ip,macid,permid)," \
 "  KEY ip (ip)," \
 "  KEY macid (macid)" \
