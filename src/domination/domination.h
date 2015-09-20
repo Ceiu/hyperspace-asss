@@ -8,11 +8,11 @@
  * Possible states for the domination game
  */
 typedef enum {
+  /* Unknown game state */
+  DOM_GAME_STATE_UNKNOWN,
+
   /* No game is active, flags are disabled and will be neutralized if touched */
   DOM_GAME_STATE_INACTIVE,
-
-  /* No game is active, but the countdown to a new game has started */
-  DOM_GAME_STATE_STARTING,
 
   /* A domination game is active */
   DOM_GAME_STATE_ACTIVE,
@@ -23,8 +23,8 @@ typedef enum {
   /* The current game has just finished and modules are processing the end-of-game event */
   DOM_GAME_STATE_FINISHED,
 
-  /* An error occurred at some point during the game. Once in this state, any existing game will
-   * lost and no new games will be started. */
+  /* An error occurred at some point during the game. Once in this state, any existing game will be
+   * lost */
   DOM_GAME_STATE_ERROR
 } DomGameState;
 
@@ -32,6 +32,9 @@ typedef enum {
  * Possible states for a region
  */
 typedef enum {
+  /* Unknown region state */
+  DOM_REGION_STATE_UNKNOWN,
+
   /* Region is completely uncontrolled -- no flags are controlled */
   DOM_REGION_STATE_NEUTRAL,
 
@@ -40,13 +43,15 @@ typedef enum {
 
   /* Region is fully controlled by a single team */
   DOM_REGION_STATE_CONTROLLED
-
 } DomRegionState;
 
 /**
  * Possible states for a flag
  */
 typedef enum {
+  /* Unknown flag state */
+  DOM_FLAG_STATE_UNKNOWN,
+
   /* Flag has not yet been touched by a team */
   DOM_FLAG_STATE_NEUTRAL,
 
@@ -61,11 +66,21 @@ typedef enum {
 
 } DomFlagState;
 
-typedef enum {
-  /* A team has controlled every region and will win shortly if uncontested */
-  DOM_ALERT_DOMINATION
+typedef u_int32_t DomAlertType;
 
-} DomAlertType;
+/* The game will be starting soon */
+#define DOM_ALERT_STARTING    1
+/* A team has controlled every region and will win shortly if uncontested */
+#define DOM_ALERT_DOMINATION  2
+
+typedef enum {
+  /* The alert is starting */
+  DOM_ALERT_STATE_STARTING,
+
+  /* The alert is ending */
+  DOM_ALERT_STATE_ENDING
+} DomAlertState;
+
 
 typedef struct DomArena DomArena;
 typedef struct DomTeam DomTeam;
@@ -102,15 +117,15 @@ typedef void (*DomFlagStateChangedFunc)(Arena *arena, DomFlag *dflag, DomFlagSta
  * @param type
  *  The alert type
  *
- * @param enabled
- *  Whether or not the alert is being set or cleared
+ * @param state
+ *  Whether or not the alert is starting or ending
  *
  * @param duration
- *  The duration of the alert, in ticks; will be zero when clearing alerts or when setting an alert
- *  which does not persist
+ *  The duration of the alert, in ticks; will be zero when the alert is ending or when setting an
+ *  alert which is not timed or does not persist
  */
 #define CB_DOM_ALERT
-typedef void (*DomAlertFunc)(Arena *arena, DomAlertType type, char enabled, ticks_t duration);
+typedef void (*DomAlertFunc)(Arena *arena, DomAlertType type, DomAlertState state, ticks_t duration);
 
 
 // Interface
@@ -129,17 +144,22 @@ typedef struct Idomination {
   DomTeam* (*GetFlagEntityControllingTeam)(DomFlag *dflag);
   DomFlagState (*GetFlagState)(DomFlag *dflag);
   void (*SetFlagState)(DomFlag *dflag, DomFlagState state, DomTeam *controlling_team, int acquired_influence, DomTeam *flag_entity_team);
+  char* (*GetTeamName)(DomTeam *dteam);
   int (*GetTeamRegionInfluence)(DomTeam *dteam, DomRegion *dregion);
+  int (*GetTeamAcquiredRegionInfluence)(DomTeam *dteam, DomRegion *dregion);
+  int (*GetTeamAcquiredControlPoints)(DomTeam *dteam);
   int (*GetRegionProvidedControlPoints)(DomRegion *dregion);
   int (*GetRegionRequiredInfluence)(DomRegion *dregion);
   int (*GetRegionPotentialInfluence)(DomRegion *dregion);
   int (*GetRegionMinimumInfluence)(DomRegion *dregion);
-  int (*GetTeamAcquiredRegionInfluence)(DomTeam *dteam, DomRegion *dregion);
   DomTeam* (*GetRegionControllingTeam)(DomRegion *dregion);
   DomTeam* (*GetRegionInfluentialTeam)(DomRegion *dregion);
   DomRegionState (*GetRegionState)(DomRegion *dregion);
   void (*SetRegionState)(DomRegion *dregion, DomRegionState state, DomTeam *dteam, int influence);
-  char* (*GetTeamName)(DomTeam *dteam);
+  DomTeam* (*GetDominatingTeam)(Arena *arena);
+  DomGameState (*GetGameState)(Arena *arena);
+  void (*SetGameState)(Arena *arena, DomGameState state);
+  void (*SetAlertState)(Arena *arena, DomAlertType type, char enabled, ticks_t duration);
 } Idomination;
 
 #endif

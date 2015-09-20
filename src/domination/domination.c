@@ -227,6 +227,7 @@ static DomTeam* GetFlagControllingTeam(DomFlag *dflag);
 static DomTeam* GetFlagEntityControllingTeam(DomFlag *dflag);
 static DomFlagState GetFlagState(DomFlag *dflag);
 static void SetFlagState(DomFlag *dflag, DomFlagState state, DomTeam *controlling_team, int acquired_influence, DomTeam *flag_entity_team);
+static char* GetTeamName(DomTeam *dteam);
 static int GetTeamRegionInfluence(DomTeam *dteam, DomRegion *dregion);
 static int GetTeamAcquiredRegionInfluence(DomTeam *dteam, DomRegion *dregion);
 static int GetTeamAcquiredControlPoints(DomTeam *dteam);
@@ -238,10 +239,11 @@ static DomTeam* GetRegionControllingTeam(DomRegion *dregion);
 static DomTeam* GetRegionInfluentialTeam(DomRegion *dregion);
 static DomRegionState GetRegionState(DomRegion *dregion);
 static void SetRegionState(DomRegion *dregion, DomRegionState state, DomTeam *dteam, int influence);
-static char* GetTeamName(DomTeam *dteam);
 static DomTeam* GetDominatingTeam(Arena *arena);
-
+static DomGameState GetGameState(Arena *arena);
+static void SetGameState(Arena *arena, DomGameState state);
 static void SetAlertState(Arena *arena, DomAlertType type, char enabled, ticks_t duration);
+
 static void UpdateFlagAcquiredInfluence(DomFlag *dflag);
 static void UpdateRegionAcquiredInfluence(DomRegion *dregion);
 static void ClearFlagTimers(DomFlag *dflag);
@@ -268,7 +270,9 @@ static void OnFlagCleanup(Arena *arena, int flag_id, int reason, Player *carrier
 static void OnFlagReset(Arena *arena, int freq, int points);
 static void OnGameStateChange(Arena *arena, DomGameState old_state, DomGameState new_state);
 static int OnDominationTimer(void *param);
+static int OnGameStartTimer(void *param);
 static int OnGameEndTimer(void *param);
+static void OnGameAlert(Arena *arena, DomAlertType type, DomAlertState state, ticks_t duration);
 static void OnPlayerAction(Player *player, int action, Arena *arena);
 static void OnPlayerDeath(Arena *arena, Player *killer, Player *killed, int bounty, int flags, int *pts, int *green);
 static void OnPlayerSpawn(Player *player, int reason);
@@ -279,13 +283,7 @@ static void OnPlayerFreqShipChange(Player *player, int newship, int oldship, int
 static void SetErrorState(Arena *arena, const char* message, ...) {
   DomArena *adata = P_ARENA_DATA(arena, adkey);
 
-  adata->game_state = DOM_GAME_STATE_ERROR;
-  ClearGameTimers(arena);
-
-  FreeRegionData(arena);
-  FreeFlagData(arena);
-  FreeTeamData(arena);
-
+  SetGameState(arena, DOM_GAME_STATE_ERROR);
 
   Link *link;
   Player *player;
@@ -980,7 +978,7 @@ static DomTeam* GetFlagEntityControllingTeam(DomFlag *dflag) {
 static DomFlagState GetFlagState(DomFlag *dflag) {
   if (!dflag) {
     lm->Log(L_ERROR, "<%s> ERROR: SetFlagState called with a null dflag parameter", DOM_MODULE_NAME);
-    return 0;
+    return DOM_FLAG_STATE_UNKNOWN;
   }
 
   return dflag->state;
@@ -1111,6 +1109,15 @@ static void SetFlagState(DomFlag *dflag, DomFlagState state, DomTeam *controllin
     DO_CBS(CB_DOM_FLAG_STATE_CHANGED, dflag->arena, DomFlagStateChangedFunc, (dflag->arena, dflag, pstate, dflag->state));
     OnFlagStateChange(dflag->arena, dflag, pstate, dflag->state);
   }
+}
+
+static char* GetTeamName(DomTeam *dteam) {
+  if (!dteam) {
+    lm->Log(L_ERROR, "<%s> ERROR: GetTeamName called with a null dteam parameter", DOM_MODULE_NAME);
+    return NULL;
+  }
+
+  return dteam->team_name;
 }
 
 static int GetTeamRegionInfluence(DomTeam *dteam, DomRegion *dregion) {
@@ -1282,7 +1289,7 @@ static DomTeam* GetRegionInfluentialTeam(DomRegion *dregion) {
 static DomRegionState GetRegionState(DomRegion *dregion) {
   if (!dregion) {
     lm->Log(L_ERROR, "<%s> ERROR: SetRegionState called with a null dregion parameter", DOM_MODULE_NAME);
-    return 0;
+    return DOM_REGION_STATE_UNKNOWN;
   }
 
   return dregion->state;
@@ -1395,15 +1402,6 @@ static void SetRegionState(DomRegion *dregion, DomRegionState state, DomTeam *co
   OnRegionStateChange(dregion->arena, dregion, pstate, dregion->state);
 }
 
-static char* GetTeamName(DomTeam *dteam) {
-  if (!dteam) {
-    lm->Log(L_ERROR, "<%s> ERROR: GetTeamName called with a null dteam parameter", DOM_MODULE_NAME);
-    return NULL;
-  }
-
-  return dteam->team_name;
-}
-
 static DomTeam* GetDominatingTeam(Arena *arena) {
   if (!arena) {
     lm->Log(L_ERROR, "<%s> ERROR: GetDominatingTeam called with a null arena parameter", DOM_MODULE_NAME);
@@ -1439,9 +1437,117 @@ static DomTeam* GetDominatingTeam(Arena *arena) {
   return dteam;
 }
 
-////////////////////////////////////////////////////////////////////////////////////////////////////
+static DomGameState GetGameState(Arena *arena) {
+  if (!arena) {
+    lm->Log(L_ERROR, "<%s> ERROR: GetGameState called with a null arena parameter", DOM_MODULE_NAME);
+    return DOM_GAME_STATE_UNKNOWN;
+  }
 
-static void SetAlertState(Arena *arena, DomAlertType type, char enabled, ticks_t duration) {
+  DomArena *adata = P_ARENA_DATA(arena, adkey);
+  return adata->game_state;
+}
+
+static void SetGameState(Arena *arena, DomGameState state) {
+  if (!arena) {
+    lm->Log(L_ERROR, "<%s> ERROR: SetGameState called with a null arena parameter", DOM_MODULE_NAME);
+    return;
+  }
+
+  DomArena *adata = P_ARENA_DATA(arena, adkey);
+  DomGameState prev_state = adata->game_state;
+
+  LinkedList *keys;
+  Link *link;
+  char *key;
+
+
+  switch (state) {
+    case DOM_GAME_STATE_INACTIVE:
+      // Stop all game timers
+      ClearGameTimers(arena);
+
+      // re-read arena settings
+      ReadArenaConfig(arena);
+
+      // Reset all flag and region states to neutral
+      if (adata->regions_initialized) {
+        keys = HashGetKeys(&adata->regions);
+        FOR_EACH(keys, key, link) {
+          DomRegion *dregion = HashGetOne(&adata->regions, key);
+          if (dregion) {
+            SetRegionState(dregion, DOM_REGION_STATE_NEUTRAL, NULL, 0);
+          }
+        }
+      }
+
+      if (adata->flags_initialized) {
+        keys = HashGetKeys(&adata->flags);
+        FOR_EACH(keys, key, link) {
+          DomFlag *dflag = HashGetOne(&adata->flags, key);
+          if (dflag) {
+            SetFlagState(dflag, DOM_FLAG_STATE_NEUTRAL, NULL, 0, NULL);
+          }
+        }
+      }
+
+      break;
+
+    case DOM_GAME_STATE_ACTIVE:
+      if (prev_state != DOM_GAME_STATE_INACTIVE && prev_state != DOM_GAME_STATE_PAUSED) {
+        lm->LogA(L_DRIVEL, DOM_MODULE_NAME, arena, "ERROR: Invalid game state transition: %d => %d", prev_state, state);
+        return;
+      }
+
+      // Clear game-start timer
+      // TODO: Warp/reship players?
+      break;
+
+    case DOM_GAME_STATE_PAUSED:
+      if (prev_state != DOM_GAME_STATE_ACTIVE) {
+        lm->LogA(L_DRIVEL, DOM_MODULE_NAME, arena, "ERROR: Invalid game state transition: %d => %d", prev_state, state);
+        return;
+      }
+
+      lm->Log(L_ERROR, "<%s> ERROR: Pausing is currently unsupported", DOM_MODULE_NAME);
+      return; // break;
+
+    case DOM_GAME_STATE_FINISHED:
+      if (prev_state != DOM_GAME_STATE_ACTIVE) {
+        lm->LogA(L_DRIVEL, DOM_MODULE_NAME, arena, "ERROR: Invalid game state transition: %d => %d", prev_state, state);
+        return;
+      }
+
+      // Clear game timers
+      ClearGameTimers(arena);
+
+      // We need to leave the rest of the game state as-is so handlers can process the final game
+      // state and do stuff as necessary. Our handler will transition us back to the inactive state.
+      break;
+
+    case DOM_GAME_STATE_ERROR:
+      // Clear our game timers...
+      ClearGameTimers(arena);
+
+      // Free data, since it's probably corrupt anyway
+      FreeRegionData(arena);
+      FreeFlagData(arena);
+      FreeTeamData(arena);
+      break;
+
+    default:
+      lm->LogA(L_DRIVEL, DOM_MODULE_NAME, arena, "ERROR: Invalid game state: %d", state);
+      return;
+  }
+
+  adata->game_state = state;
+
+  // Do callbacks. Note that we always call ours last to give plugins a chance to process the
+  // event before we go on changing other stuff
+  DO_CBS(CB_DOM_GAME_STATE_CHANGED, arena, DomGameStateChangedFunc, (arena, prev_state, adata->game_state));
+  OnGameStateChange(arena, prev_state, adata->game_state);
+}
+
+static void SetAlertState(Arena *arena, DomAlertType type, DomAlertState state, ticks_t duration) {
   if (!arena) {
     lm->Log(L_ERROR, "<%s> ERROR: SetAlertState called with a null arena parameter", DOM_MODULE_NAME);
     return NULL;
@@ -1449,7 +1555,10 @@ static void SetAlertState(Arena *arena, DomAlertType type, char enabled, ticks_t
 
   // Do we need to do anything fancy here...?
   DO_CBS(CB_DOM_ALERT, arena, DomAlertFunc, (arena, type, enabled, duration));
+  OnGameAlert(arena, type, state, duration);
 }
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
 
 static void UpdateFlagAcquiredInfluence(DomFlag *dflag) {
   if (dflag->last_influence_update) {
@@ -1604,11 +1713,13 @@ static void OnArenaDetach(Arena *arena) {
 }
 
 static void OnArenaAction(Arena *arena, int action) {
-  switch (action) {
-    case AA_CONFCHANGED:
-      ReadArenaConfig(arena);
-      break;
-  }
+  // We don't do this during games anymore.
+
+  // switch (action) {
+  //   case AA_CONFCHANGED:
+  //     ReadArenaConfig(arena);
+  //     break;
+  // }
 }
 
 static void OnFlagGameInit(Arena *arena) {
@@ -1821,14 +1932,12 @@ static void OnFlagReset(Arena *arena, int freq, int points) {
   chat->SendArenaMessage(arena, "Flag game reset. We don't like this at all.");
 }
 
-
-
-
-
-
-
 static void OnGameStateChange(Arena *arena, DomGameState old_state, DomGameState new_state) {
-  // Not sure what to do here quite yet
+  if (new_state == DOM_GAME_STATE_FINISHED) {
+    // we've finished handling the end-of-game event; transition back to INACTIVE to prepare for
+    // the next game
+    SetGameState(arena, DOM_GAME_STATE_INACTIVE);
+  }
 }
 
 static int OnDominationTimer(void *param) {
@@ -1837,8 +1946,7 @@ static int OnDominationTimer(void *param) {
   // Dominating team wins
   DomTeam *dteam = GetDominatingTeam(adata->arena);
   if (dteam) {
-
-
+    SetGameState(arena, DOM_GAME_STATE_FINISHED);
   }
   else {
     lm->LogA(L_ERROR, DOM_MODULE_NAME, arena, "Domination event triggered, but no team appears to be dominating");
@@ -1847,16 +1955,20 @@ static int OnDominationTimer(void *param) {
   return 0;
 }
 
-static int OnGameEndTimer(void *param) {
-  // Game ended via time
-  // Set game state to FINISHED
+static int OnGameStartTimer(void *param) {
+  // Game started
+
+  // If we're still inactive
+
 
   return 0;
 }
 
-
-
-
+static int OnGameEndTimer(void *param) {
+  // Game ended via time; set game state to FINISHED
+  SetGameState(arena, DOM_GAME_STATE_INACTIVE);
+  return 0;
+}
 
 
 
@@ -1890,6 +2002,7 @@ static void OnPlayerFreqShipChange(Player *player, int newship, int oldship, int
 
 static Iflaggame flagcore_flaggame_interface = {
   INTERFACE_HEAD_INIT(I_FLAGGAME, DOM_MODULE_NAME "-flaggame")
+
   OnFlagGameInit,
   OnFlagTouch,
   OnFlagCleanup
@@ -1909,17 +2022,22 @@ static Idomination domination_interface = {
   GetFlagEntityControllingTeam,
   GetFlagState,
   SetFlagState,
+  GetTeamName,
   GetTeamRegionInfluence,
+  GetTeamAcquiredRegionInfluence,
+  GetTeamAcquiredControlPoints,
   GetRegionProvidedControlPoints,
   GetRegionRequiredInfluence,
   GetRegionPotentialInfluence,
   GetRegionMinimumInfluence,
-  GetTeamAcquiredRegionInfluence,
   GetRegionControllingTeam,
   GetRegionInfluentialTeam,
   GetRegionState,
   SetRegionState,
-  GetTeamName,
+  GetDominatingTeam,
+  GetGameState,
+  SetGameState,
+  SetAlertState
 };
 
 /**
