@@ -474,7 +474,7 @@ local void flagWinCallback(Arena *arena, int freq, int *pts)
 		ticks_t q60_playtime = 1; // Mathematically 60th quartile, realistically 80th for small games (< 5)
 		size_t n_flagging = 0;
 		FOR_EACH_PLAYER_IN_ARENA(i, arena)
-			if (flagging_freq(arena, i->p_freq) && i->p_freq == freq)
+			if (flagging_freq(arena, i->p_freq) && i->p_freq == freq && IS_HUMAN(i))
 				++n_flagging;	
 
 		if (n_flagging > 0)
@@ -482,7 +482,7 @@ local void flagWinCallback(Arena *arena, int freq, int *pts)
 			ticks_t *flagging_times = amalloc(sizeof(ticks_t) * n_flagging);
 			int j = 0;
 			FOR_EACH_PLAYER_IN_ARENA(i, arena)
-				if (flagging_freq(arena, i->p_freq) && i->p_freq == freq)
+				if (flagging_freq(arena, i->p_freq) && i->p_freq == freq && IS_HUMAN(i))
 				{
 					char *time_key = playtime_key(i, i->p_freq);
 					ticks_t *playtime = HashGetOne(adata->players_flag_time, time_key);								
@@ -498,7 +498,7 @@ local void flagWinCallback(Arena *arena, int freq, int *pts)
 		//Distribute Wealth    
 		FOR_EACH_PLAYER(i)
 		{
-			if(i->arena == arena && i->p_ship != SHIP_SPEC)
+			if(i->arena == arena && i->p_ship != SHIP_SPEC && IS_HUMAN(i))
 			{
 				if (i->p_freq == freq) {
 					int exp_reward = adata->max_flag_exp;
@@ -522,13 +522,16 @@ local void flagWinCallback(Arena *arena, int freq, int *pts)
 					
 					hsd_reward *= time_fraction;
 					exp_reward *= time_fraction;
+          int time_pct = (int) round(100 * time_fraction);
+          if (time_pct == 99)
+            time_pct = 100;
 
 					if (exp_reward && hsd_reward) {
-						chat->SendMessage(i, "You received $%d and %d exp for a flag win (%.0f%% of the normalized playing time).", hsd_reward, exp_reward, round(time_fraction * 100));
+						chat->SendMessage(i, "You received $%d and %d exp for a flag win (%d%% of the normalized playing time).", hsd_reward, exp_reward, time_pct);
 					} else if (exp_reward) {
-						chat->SendMessage(i, "You received %d exp for a flag win (%.0f%% of the normalized playing time).", exp_reward, round(time_fraction * 100));
+						chat->SendMessage(i, "You received %d exp for a flag win (%d%% of the normalized playing time).", exp_reward, time_pct);
 					} else if (hsd_reward) {
-						chat->SendMessage(i, "You received $%d for a flag win (%.0f%% of the normalized playing time).", hsd_reward, round(time_fraction * 100));
+						chat->SendMessage(i, "You received $%d for a flag win (%d%% of the normalized playing time).", hsd_reward, time_pct);
 					} else {
 						chat->SendMessage(i, "You didn't play long enough for a reward.");
 					}
@@ -569,7 +572,7 @@ local void flagWinCallback(Arena *arena, int freq, int *pts)
 
 		pd->Lock();
 		FOR_EACH_PLAYER_IN_ARENA(i, arena)
-			if (flagging_freq(arena, i->p_freq))
+			if (flagging_freq(arena, i->p_freq) && IS_HUMAN(i))
 				begin_playtime(i, i->p_freq);
 		pd->Unlock();
 
@@ -879,11 +882,11 @@ local void shipFreqChangeCallback(Player *p, int newship, int oldship, int newfr
 	PData *pdata = PPDATA(p, pdkey);
 	pdata->periodic_tally = 0;
 
-	if (flagging_freq(p->arena, oldfreq) && !flagging_freq(p->arena, newfreq))
+	if (flagging_freq(p->arena, oldfreq) && !flagging_freq(p->arena, newfreq) && IS_HUMAN(p))
 		end_playtime(p, oldfreq);
-	else if (!flagging_freq(p->arena, oldfreq) && flagging_freq(p->arena, newfreq))
+	else if (!flagging_freq(p->arena, oldfreq) && flagging_freq(p->arena, newfreq) && IS_HUMAN(p))
 		begin_playtime(p, newfreq);
-	else if (flagging_freq(p->arena, oldfreq) && flagging_freq(p->arena, newfreq))
+	else if (flagging_freq(p->arena, oldfreq) && flagging_freq(p->arena, newfreq) && IS_HUMAN(p))
 	{
 		end_playtime(p, oldfreq);
 		begin_playtime(p, newfreq);
