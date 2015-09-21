@@ -471,11 +471,11 @@ local void flagWinCallback(Arena *arena, int freq, int *pts)
 			if (flagging_freq(arena, i->p_freq))
 				end_playtime(i, i->p_freq);
 
-		ticks_t q60_playtime = 1; // Mathematically 60th quartile, realistically 80th for small games (< 5)
+		ticks_t q60_playtime = 1; // Mathematically 60th percentile, realistically 80th for small games (< 5)
 		size_t n_flagging = 0;
 		FOR_EACH_PLAYER_IN_ARENA(i, arena)
 			if (flagging_freq(arena, i->p_freq) && i->p_freq == freq && IS_HUMAN(i))
-				++n_flagging;	
+				++n_flagging;
 
 		if (n_flagging > 0)
 		{
@@ -485,7 +485,7 @@ local void flagWinCallback(Arena *arena, int freq, int *pts)
 				if (flagging_freq(arena, i->p_freq) && i->p_freq == freq && IS_HUMAN(i))
 				{
 					char *time_key = playtime_key(i, i->p_freq);
-					ticks_t *playtime = HashGetOne(adata->players_flag_time, time_key);								
+					ticks_t *playtime = HashGetOne(adata->players_flag_time, time_key);
 					flagging_times[j++] = *playtime;
 					afree(time_key);
 				}
@@ -513,13 +513,13 @@ local void flagWinCallback(Arena *arena, int freq, int *pts)
 					// hsd_reward *= hsd_mul;
 
 					char *time_key = playtime_key(i, i->p_freq);
-					ticks_t *playtime = HashGetOne(adata->players_flag_time, time_key);				
+					ticks_t *playtime = HashGetOne(adata->players_flag_time, time_key);
 					afree(time_key);
 
 					double time_fraction = 1;
 					if (playtime)
 						time_fraction = scale_time_played(*playtime / ((double) q60_playtime));
-					
+
 					hsd_reward *= time_fraction;
 					exp_reward *= time_fraction;
 					int time_pct = (int) round(100 * time_fraction);
@@ -1101,7 +1101,6 @@ local void get_formulas(Arena *arena)
 	const char *include_rgn, *exclude_rgn, *bonus_rgn;
 	char error[200];
 	error[0] = '\0';
-
 
 	// free the formulas if they already exist
 	free_formulas(arena);
