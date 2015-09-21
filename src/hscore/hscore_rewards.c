@@ -474,7 +474,7 @@ local void flagWinCallback(Arena *arena, int freq, int *pts)
 		ticks_t q60_playtime = 1; // Mathematically 60th percentile, realistically 80th for small games (< 5)
 		size_t n_flagging = 0;
 		FOR_EACH_PLAYER_IN_ARENA(i, arena)
-			if (flagging_freq(arena, i->p_freq) && i->p_freq == freq && IS_HUMAN(i))
+			if (flagging_freq(arena, i->p_freq) && i->p_freq == freq && IS_HUMAN(i) && i->p_ship != SHIP_SPEC)
 				++n_flagging;
 
 		if (n_flagging > 0)
@@ -482,7 +482,7 @@ local void flagWinCallback(Arena *arena, int freq, int *pts)
 			ticks_t *flagging_times = amalloc(sizeof(ticks_t) * n_flagging);
 			int j = 0;
 			FOR_EACH_PLAYER_IN_ARENA(i, arena)
-				if (flagging_freq(arena, i->p_freq) && i->p_freq == freq && IS_HUMAN(i))
+				if (flagging_freq(arena, i->p_freq) && i->p_freq == freq && IS_HUMAN(i) && i->p_ship != SHIP_SPEC)
 				{
 					char *time_key = playtime_key(i, i->p_freq);
 					ticks_t *playtime = HashGetOne(adata->players_flag_time, time_key);
@@ -498,7 +498,7 @@ local void flagWinCallback(Arena *arena, int freq, int *pts)
 		//Distribute Wealth    
 		FOR_EACH_PLAYER(i)
 		{
-			if(i->arena == arena && i->p_ship != SHIP_SPEC && IS_HUMAN(i))
+			if(i->arena == arena && i->p_ship != SHIP_SPEC && IS_HUMAN(i) && i->p_ship != SHIP_SPEC)
 			{
 				if (i->p_freq == freq) {
 					int exp_reward = adata->max_flag_exp;
@@ -884,12 +884,13 @@ local void shipFreqChangeCallback(Player *p, int newship, int oldship, int newfr
 
 	if (flagging_freq(p->arena, oldfreq) && !flagging_freq(p->arena, newfreq) && IS_HUMAN(p))
 		end_playtime(p, oldfreq);
-	else if (!flagging_freq(p->arena, oldfreq) && flagging_freq(p->arena, newfreq) && IS_HUMAN(p))
+	else if (!flagging_freq(p->arena, oldfreq) && flagging_freq(p->arena, newfreq) && IS_HUMAN(p) && p->p_ship != SHIP_SPEC)
 		begin_playtime(p, newfreq);
 	else if (flagging_freq(p->arena, oldfreq) && flagging_freq(p->arena, newfreq) && IS_HUMAN(p))
 	{
 		end_playtime(p, oldfreq);
-		begin_playtime(p, newfreq);
+		if (p->p_ship != SHIP_SPEC)
+			begin_playtime(p, newfreq);
 	}
 }
 
