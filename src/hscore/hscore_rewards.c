@@ -522,9 +522,9 @@ local void flagWinCallback(Arena *arena, int freq, int *pts)
 					
 					hsd_reward *= time_fraction;
 					exp_reward *= time_fraction;
-          int time_pct = (int) round(100 * time_fraction);
-          if (time_pct == 99)
-            time_pct = 100;
+					int time_pct = (int) round(100 * time_fraction);
+					if (time_pct == 99)
+						time_pct = 100;
 
 					if (exp_reward && hsd_reward) {
 						chat->SendMessage(i, "You received $%d and %d exp for a flag win (%d%% of the normalized playing time).", hsd_reward, exp_reward, time_pct);
