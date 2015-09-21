@@ -68,17 +68,25 @@ typedef enum {
 
 typedef u_int32_t DomAlertType;
 
+/* */
+#define DOM_ALERT_TYPE_UNKNOWN -1
 /* The game will be starting soon */
-#define DOM_ALERT_STARTING    1
+#define DOM_ALERT_TYPE_GAME_STARTING 1
 /* A team has controlled every region and will win shortly if uncontested */
-#define DOM_ALERT_DOMINATION  2
+#define DOM_ALERT_TYPE_DOMINATION 2
 
 typedef enum {
+  /* Unknown alert state */
+  DOM_ALERT_STATE_UNKNOWN,
+
   /* The alert is starting */
   DOM_ALERT_STATE_STARTING,
 
-  /* The alert is ending */
-  DOM_ALERT_STATE_ENDING
+  /* The alert is ending (timed events only) */
+  DOM_ALERT_STATE_EXPIRED,
+
+  /* The alert was cleared before expiring */
+  DOM_ALERT_STATE_CLEARED
 } DomAlertState;
 
 
@@ -124,7 +132,7 @@ typedef void (*DomFlagStateChangedFunc)(Arena *arena, DomFlag *dflag, DomFlagSta
  *  The duration of the alert, in ticks; will be zero when the alert is ending or when setting an
  *  alert which is not timed or does not persist
  */
-#define CB_DOM_ALERT
+#define CB_DOM_ALERT "dom_alert-cb-1"
 typedef void (*DomAlertFunc)(Arena *arena, DomAlertType type, DomAlertState state, ticks_t duration);
 
 
@@ -159,7 +167,7 @@ typedef struct Idomination {
   DomTeam* (*GetDominatingTeam)(Arena *arena);
   DomGameState (*GetGameState)(Arena *arena);
   void (*SetGameState)(Arena *arena, DomGameState state);
-  void (*SetAlertState)(Arena *arena, DomAlertType type, char enabled, ticks_t duration);
+  void (*SetAlertState)(Arena *arena, DomAlertType type, DomAlertState state, ticks_t duration);
 } Idomination;
 
 #endif

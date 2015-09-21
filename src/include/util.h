@@ -278,8 +278,7 @@ void HashAddFront(HashTable *table, const char *key, const void *value);
 /** inserts a new key, value pair into the table, replacing one previous
  ** value associated with this key.
  * if you use only HashReplace on a table, it effectively behaves like a
- * standard map that supports one value for each key.
- */
+ * standard map that supports one value for each key. */
 void HashReplace(HashTable *table, const char *key, const void *value);
 /** removes one instance of the key, value pair from the table. */
 void HashRemove(HashTable *table, const char *key, const void *value);
