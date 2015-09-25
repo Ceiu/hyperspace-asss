@@ -45,6 +45,7 @@
  *
  * @author Chris "Ceiu" Rog <ceiu@cericlabs.com>
  */
+#include <ctype.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -96,7 +97,11 @@ struct DomArena {
   char alerts_initialized;
 
   DomGameState game_state;
-  u_int32_t game_time_remaining;
+  ticks_t game_start_time;
+  ticks_t game_pause_time;
+  ticks_t game_end_time;
+  ticks_t game_cooldown_start;
+  ticks_t game_cooldown;
 
   char updating_flag_status;
 
@@ -106,8 +111,10 @@ struct DomArena {
   u_int32_t cfg_min_players;
   u_int32_t cfg_min_players_per_team;
   u_int32_t cfg_game_duration;
+  u_int32_t cfg_game_duration_random;
   u_int32_t cfg_game_cooldown;
   u_int32_t cfg_game_cooldown_random;
+  u_int32_t cfg_game_start_countdown;
   u_int32_t cfg_flag_capture_time;
   u_int32_t cfg_flag_contest_time;
   u_int32_t cfg_defense_reward_frequency;
@@ -175,6 +182,7 @@ struct DomFlag {
   u_int32_t cfg_flag_influence;
 };
 
+// TODO: Actually implement this, maybe. It may not be necessary for anything in the domination core.
 struct DomPlayer {
   u_int32_t playtime;
   ticks_t last_join_time;
@@ -201,6 +209,7 @@ static Ilogman *lm;
 static Imainloop *mainloop;
 static Imapdata *mapdata;
 static Iplayerdata *pd;
+static Iprng *prng;
 
 // Global resource identifiers
 static int adkey;
@@ -259,7 +268,10 @@ static DomRegionState GetRegionState(DomRegion *dregion);
 static void SetRegionState(DomRegion *dregion, DomRegionState state, DomTeam *dteam, int influence);
 static DomTeam* GetDominatingTeam(Arena *arena);
 static DomGameState GetGameState(Arena *arena);
+static ticks_t GetGameTimeRemaining(Arena *arena);
 static void SetGameState(Arena *arena, DomGameState state);
+static DomAlertState GetAlertState(Arena *arena, DomAlertType type);
+static ticks_t GetAlertTimeRemaining(Arena *arena, DomAlertType type);
 static void SetAlertState(Arena *arena, DomAlertType type, DomAlertState state, ticks_t duration);
 
 static void UpdateFlagAcquiredInfluence(DomFlag *dflag);
@@ -269,6 +281,8 @@ static void ClearRegionTimers(DomRegion *dregion);
 static void ClearGameTimers(Arena *arena);
 static int UpdateFlagStateTimer(void *param);
 static void UpdateFlagState(Arena *arena);
+static void CheckActivePlayerCounts(Arena *arena);
+static void GetPlayerHashKey(Player *player, char *key, size_t len);
 
 static void OnArenaAttach(Arena *arena);
 static void OnArenaDetach(Arena *arena);
@@ -286,15 +300,15 @@ static void OnRegionStateChange(Arena *arena, DomRegion *dregion, DomRegionState
 static void OnFlagCleanup(Arena *arena, int flag_id, int reason, Player *carrier, int freq);
 static void OnFlagReset(Arena *arena, int freq, int points);
 static void OnGameStateChange(Arena *arena, DomGameState old_state, DomGameState new_state);
-static int OnDominationTimer(void *param);
-static int OnGameStartTimer(void *param);
+static int OnGameCooldownTimer(void *param);
 static int OnGameEndTimer(void *param);
 static void OnGameAlert(Arena *arena, DomAlertType type, DomAlertState state, ticks_t duration);
 static int OnGameAlertTimer(void *param);
+static int OnGameDefenseTimer(void *param);
 static void OnPlayerAction(Player *player, int action, Arena *arena);
-static void OnPlayerDeath(Arena *arena, Player *killer, Player *killed, int bounty, int flags, int *pts, int *green);
-static void OnPlayerSpawn(Player *player, int reason);
 static void OnPlayerFreqShipChange(Player *player, int newship, int oldship, int newfreq, int oldfreq);
+// static void OnPlayerDeath(Arena *arena, Player *killer, Player *killed, int bounty, int flags, int *pts, int *green);
+// static void OnPlayerSpawn(Player *player, int reason);
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -326,14 +340,19 @@ static void SetErrorState(Arena *arena, const char* message, ...) {
 static void InitArenaData(Arena *arena) {
   DomArena *adata = P_ARENA_DATA(arena, adkey);
 
+  adata->arena = arena;
+
   adata->teams_initialized = 0;
   adata->regions_initialized = 0;
   adata->flags_initialized = 0;
   adata->alerts_initialized = 0;
 
-  // TODO: CHANGE THIS BACK TO INACTIVE
-  adata->game_state = DOM_GAME_STATE_ACTIVE;
-  adata->game_time_remaining = 0;
+  adata->game_state = DOM_GAME_STATE_INACTIVE;
+  adata->game_start_time = 0;
+  adata->game_pause_time = 0;
+  adata->game_end_time = 0;
+  adata->game_cooldown_start = 0;
+  adata->game_cooldown = 0;
 
   adata->updating_flag_status = 0;
 }
@@ -823,7 +842,7 @@ static DomAlert* AllocAlert(Arena *arena, DomAlertType type) {
       sprintf(alert_key, "alert-%d", type);
       HashReplace(&adata->alerts, alert_key, dalert);
     } else {
-      SetErrorState(arena, "ERROR: Unable to allocate memory for a new DomFlag instance");
+      SetErrorState(arena, "ERROR: Unable to allocate memory for a new DomAlert instance");
     }
   }
 
@@ -904,11 +923,11 @@ static int ReadArenaConfig(Arena *arena) {
    * with the Domination.Region#-* settings. */
   adata->cfg_region_count = DOM_CLAMP(cfg->GetInt(arena->cfg, "Domination", "RegionCount", 1), 1, 255);
 
-  /* cfghelp: Domination:DominationCountdown, arena, int, def: 600
-   * The amount of time in centiseconds a team must control all regions to complete the domination
+  /* cfghelp: Domination:DominationCountdown, arena, int, def: 60
+   * The amount of time in seconds a team must control all regions to complete the domination
    * win condition. If set to zero or a negative value, the game will end as soon as a team controls
    * the final region. */
-  adata->cfg_domination_countdown = DOM_MAX(cfg->GetInt(arena->cfg, "Domination", "DominationCountdown", 600), 0);
+  adata->cfg_domination_countdown = DOM_MAX(cfg->GetInt(arena->cfg, "Domination", "DominationCountdown", 60), 0);
 
   /* cfghelp: Domination:MinimumPlayers, arena, int, def: 3
    * The minimum number of active players in the arena required to start a new game. If set to zero,
@@ -923,38 +942,61 @@ static int ReadArenaConfig(Arena *arena) {
   /* cfghelp: Domination:GameDuration, arena, int, def: 60
    * The length of a domination game in minutes. If this value is less than one, the game will
    * not have a time limit, ending only upon domination. */
-  adata->cfg_game_duration = cfg->GetInt(arena->cfg, "Domination", "GameDuration", 60);
+  adata->cfg_game_duration = DOM_MAX(cfg->GetInt(arena->cfg, "Domination", "GameDuration", 60), 0);
+  /* cfghelp: Domination:GameDurationRandom, arena, int, def: 10
+   * The amount of random variation in the game duration, in minutes. If set, the total game time
+   * will be GameDuration-GameDurationRandom+rand(0, GameDurationRandom*2). Must be set no higher
+   * than half the value defined for GameDuration. Ignored entirely if GameDuration is not set. */
+  adata->cfg_game_duration_random = DOM_MAX(cfg->GetInt(arena->cfg, "Domination", "GameDurationRandom", 10), 0);
+
   /* cfghelp: Domination:GameCooldown, arena, int, def: 15
    * The amount of time between games, in minutes. If set to zero, a new game will start
    * immediately upon the conclusion of the previous. */
-  adata->cfg_game_cooldown = cfg->GetInt(arena->cfg, "Domination", "GameCooldown", 15);
+  adata->cfg_game_cooldown = DOM_MAX(cfg->GetInt(arena->cfg, "Domination", "GameCooldown", 10), 0);
   /* cfghelp: Domination:GameCooldownRandom, arena, int, def: 5
-   * The amount of time randomly added to the game cooldown. Ignored if GameCooldown is set to
-   * zero. */
-  adata->cfg_game_cooldown_random = cfg->GetInt(arena->cfg, "Domination", "GameCooldownRandom", 5);
+   * The amount of time randomly added to the game cooldown, in minutes. If set, the total cooldown
+   * will be GameCooldown-GameCooldownRandom+rand(0, GameCooldownRandom*2). Ignored if GameCooldown
+   * is not set. */
+  adata->cfg_game_cooldown_random = DOM_MAX(cfg->GetInt(arena->cfg, "Domination", "GameCooldownRandom", 5), 0);
+
+  /* cfghelp: Domination:GameStartCountdown, arena, int, def: 300
+   * The duration of the game start countdown, in seconds. If set to a value lower than five, games
+   * games will start after a five-second countdown. */
+  adata->cfg_game_start_countdown = DOM_MAX(cfg->GetInt(arena->cfg, "Domination", "GameStartCountdown", 5), 5);
 
   /* cfghelp: Domination:FlagCaptureTime, arena, int, def: 9000
    * The amount of time needed to capture a flag, in centiseconds. A flag which is controlled by
    * another team requires twice this time. */
-  adata->cfg_flag_capture_time = cfg->GetInt(arena->cfg, "Domination", "FlagCaptureTime", 9000);
+  adata->cfg_flag_capture_time = DOM_MAX(cfg->GetInt(arena->cfg, "Domination", "FlagCaptureTime", 9000), 0);
   /* cfghelp: Domination:FlagContestTime, arena, int, def: 1000
    * The amount of time in centiseconds after a flag is touched to transition it to the contested or
    * controlled state. */
-  adata->cfg_flag_contest_time = cfg->GetInt(arena->cfg, "Domination", "FlagContestTime", 1000);
+  adata->cfg_flag_contest_time = DOM_MAX(cfg->GetInt(arena->cfg, "Domination", "FlagContestTime", 1000), 0);
   /* cfghelp: Domination:DefenseEventFrequency, arena, int, def: 9000
    * The frequency, in centiseconds, at which to fire defense events for players for defending
    * controlled regions. If set to zero, defense events will be disabled. */
-  adata->cfg_defense_reward_frequency = cfg->GetInt(arena->cfg, "Domination", "DefenseEventFrequency", 9000);
-  /* cfghelp: Domination:DefenseEventRadius, arena, int, def: 500
+  adata->cfg_defense_reward_frequency = DOM_MAX(cfg->GetInt(arena->cfg, "Domination", "DefenseEventFrequency", 9000), 0);
+  /* cfghelp: Domination:DefenseEventRadius, arena, int, def: 256
    * The maximum distance, in pixels, the center of a player's ship can be from the center of a
    * region to fire a defense event. */
-  adata->cfg_defense_reward_radius = cfg->GetInt(arena->cfg, "Domination", "DefenseEventRadius", 500);
+  adata->cfg_defense_reward_radius = DOM_MAX(cfg->GetInt(arena->cfg, "Domination", "DefenseEventRadius", 256), 0);
+  adata->cfg_defense_reward_radius *= adata->cfg_defense_reward_radius; // Store the square for quicker comparisons
+
+  // Do sanity checks
+  if (adata->cfg_game_duration && adata->cfg_game_duration_random) {
+    if (adata->cfg_game_duration_random > (adata->cfg_game_duration >> 1)) {
+      SetErrorState(arena, "Invalid settings detected for GameDuration and GameDurationRandom; GameDuration must be at least twice GameDurationRandom: %d < %d << 1", adata->cfg_game_duration, adata->cfg_game_duration_random);
+      return 0;
+    }
+  }
 
   LoadTeamData(arena);
   LoadRegionData(arena);
   LoadFlagData(arena);
 
   lm->LogA(L_INFO, DOM_MODULE_NAME, arena, "Arena configuration loaded");
+
+  // All is well
   return 1;
 }
 
@@ -1186,11 +1228,6 @@ static void SetFlagState(DomFlag *dflag, DomFlagState state, DomTeam *controllin
   UpdateFlagState(dflag->arena);
 
 
-  chat->SendArenaMessage(dflag->arena, "%d: Flag state update! Flag: %d, State: %d, team: %d, influence: %d, flag owner: %d",
-    current_ticks() / 100, dflag->flag_id, dflag->state, (dflag->controlling_team ? dflag->controlling_team->cfg_team_freq : -1), dflag->acquired_influence, (dflag->flag_team ? dflag->flag_team->cfg_team_freq : -1)
-  );
-
-
   if (change) {
     // Cancel existing flag timers for the given flag
     ClearFlagTimers(dflag);
@@ -1220,8 +1257,10 @@ static void SetFlagState(DomFlag *dflag, DomFlagState state, DomTeam *controllin
 
     // Do callbacks. Note that we always call ours last to give plugins a chance to process the
     // event before we go on changing other stuff (regions)
-    DO_CBS(CB_DOM_FLAG_STATE_CHANGED, dflag->arena, DomFlagStateChangedFunc, (dflag->arena, dflag, pstate, dflag->state));
-    OnFlagStateChange(dflag->arena, dflag, pstate, dflag->state);
+    if (GetGameState(dflag->arena) == DOM_GAME_STATE_ACTIVE) {
+      DO_CBS(CB_DOM_FLAG_STATE_CHANGED, dflag->arena, DomFlagStateChangedFunc, (dflag->arena, dflag, pstate, dflag->state));
+      OnFlagStateChange(dflag->arena, dflag, pstate, dflag->state);
+    }
   }
 }
 
@@ -1480,12 +1519,6 @@ static void SetRegionState(DomRegion *dregion, DomRegionState state, DomTeam *co
   dregion->controlling_team = controlling_team;
   dregion->acquired_influence = acquired_influence;
 
-
-  DomTeam *iteam = GetRegionInfluentialTeam(dregion);
-  chat->SendArenaMessage(dregion->arena, "=== %d: Region state update! Region: %d, State: %d, team: %d, influence: %d, iteam: %d",
-    current_ticks() / 100, dregion->region_id, dregion->state, (dregion->controlling_team ? dregion->controlling_team->cfg_team_freq : -1), dregion->acquired_influence, (iteam ? iteam->cfg_team_freq : -1)
-  );
-
   // Cancel existing flag timers for the given flag
   ClearRegionTimers(dregion);
   DomTeam *influential_team = GetRegionInfluentialTeam(dregion);
@@ -1539,8 +1572,10 @@ static void SetRegionState(DomRegion *dregion, DomRegionState state, DomTeam *co
 
   // Do callbacks. Note that we always call ours last to give plugins a chance to process the
   // event before we go on changing other stuff (regions)
-  DO_CBS(CB_DOM_REGION_STATE_CHANGED, dregion->arena, DomRegionStateChangedFunc, (dregion->arena, dregion, pstate, dregion->state));
-  OnRegionStateChange(dregion->arena, dregion, pstate, dregion->state);
+  if (GetGameState(dregion->arena) == DOM_GAME_STATE_ACTIVE) {
+    DO_CBS(CB_DOM_REGION_STATE_CHANGED, dregion->arena, DomRegionStateChangedFunc, (dregion->arena, dregion, pstate, dregion->state));
+    OnRegionStateChange(dregion->arena, dregion, pstate, dregion->state);
+  }
 }
 
 static DomTeam* GetDominatingTeam(Arena *arena) {
@@ -1588,6 +1623,29 @@ static DomGameState GetGameState(Arena *arena) {
   return adata->game_state;
 }
 
+static ticks_t GetGameTimeRemaining(Arena *arena) {
+  if (!arena) {
+    lm->Log(L_ERROR, "<%s> ERROR: GetGameTimeRemaining called with a null arena parameter", DOM_MODULE_NAME);
+    return DOM_GAME_STATE_UNKNOWN;
+  }
+
+  DomArena *adata = P_ARENA_DATA(arena, adkey);
+
+  switch (adata->game_state) {
+    case DOM_GAME_STATE_ACTIVE:
+      if (adata->game_end_time) {
+        return adata->game_end_time - adata->game_start_time;
+      }
+      break;
+
+    // TODO:
+    // Add paused handler in here...
+  }
+
+  return 0;
+}
+
+
 static void SetGameState(Arena *arena, DomGameState state) {
   if (!arena) {
     lm->Log(L_ERROR, "<%s> ERROR: SetGameState called with a null arena parameter", DOM_MODULE_NAME);
@@ -1631,6 +1689,12 @@ static void SetGameState(Arena *arena, DomGameState state) {
         }
       }
 
+      // Reset other misc game states...
+      adata->game_start_time = 0;
+      adata->game_pause_time = 0;
+      adata->game_end_time = 0;
+      adata->game_cooldown_start = 0;
+      adata->game_cooldown = 0;
       break;
 
     case DOM_GAME_STATE_ACTIVE:
@@ -1640,7 +1704,37 @@ static void SetGameState(Arena *arena, DomGameState state) {
       }
 
       // Clear game-start timer
-      // TODO: Warp/reship players?
+
+      // Set game states...
+      adata->game_start_time = current_ticks();
+      adata->game_pause_time = 0;
+
+      if (adata->cfg_game_duration > 0) {
+        int game_duration = adata->cfg_game_duration;
+
+        if (adata->cfg_game_duration_random > 0) {
+          game_duration -= adata->cfg_game_duration_random;
+          game_duration += prng->Rand() % (adata->cfg_game_duration_random << 1);
+
+          if (game_duration < 0) {
+            game_duration = 0;
+          }
+        }
+
+        adata->game_end_time = adata->game_start_time + (game_duration * 6000);
+
+        chat->SendArenaMessage(arena, "Setting game to end in %d ticks", (adata->game_end_time - adata->game_start_time));
+        mainloop->SetTimer(OnGameEndTimer, (adata->game_end_time - adata->game_start_time), 0, arena, arena);
+      }
+      else {
+        adata->game_end_time = 0;
+      }
+
+      // Enable game defense timer...
+      if (adata->cfg_defense_reward_frequency > 0 && adata->cfg_defense_reward_radius > 0) {
+        mainloop->SetTimer(OnGameDefenseTimer, adata->cfg_defense_reward_frequency, adata->cfg_defense_reward_frequency, arena, arena);
+      }
+
       break;
 
     case DOM_GAME_STATE_PAUSED:
@@ -1663,6 +1757,31 @@ static void SetGameState(Arena *arena, DomGameState state) {
 
       // We need to leave the rest of the game state as-is so handlers can process the final game
       // state and do stuff as necessary. Our handler will transition us back to the inactive state.
+      break;
+
+    case DOM_GAME_STATE_COOLDOWN:
+      // Check if there's a game cooldown we need to respect
+      if (adata->cfg_game_cooldown > 0) {
+        adata->game_cooldown_start = current_ticks();
+        adata->game_cooldown = adata->cfg_game_cooldown;
+
+        if (adata->cfg_game_cooldown_random > 0) {
+          adata->game_cooldown -= adata->cfg_game_cooldown_random;
+          adata->game_cooldown += prng->Rand() % (adata->cfg_game_cooldown_random << 1);
+
+          if (adata->game_cooldown < 0) {
+            adata->game_cooldown = 0;
+          }
+        }
+
+        adata->game_cooldown *= 6000;
+      }
+      else {
+        adata->game_cooldown = 0;
+      }
+
+      chat->SendArenaMessage(arena, "Setting cooldown for %d ticks", adata->game_cooldown);
+      mainloop->SetTimer(OnGameCooldownTimer, adata->game_cooldown, 0, arena, arena);
       break;
 
     case DOM_GAME_STATE_ERROR:
@@ -1691,17 +1810,17 @@ static void SetGameState(Arena *arena, DomGameState state) {
 
 static DomAlertState GetAlertState(Arena *arena, DomAlertType type) {
   if (!arena) {
-    lm->Log(L_ERROR, "<%s> ERROR: SetAlertState called with a null arena parameter", DOM_MODULE_NAME);
+    lm->Log(L_ERROR, "<%s> ERROR: GetAlertState called with a null arena parameter", DOM_MODULE_NAME);
     return DOM_ALERT_STATE_UNKNOWN;
   }
 
   DomAlert *dalert = GetDomAlert(arena, type);
-  return dalert ? dalert->state : DOM_ALERT_STATE_UNKNOWN;
+  return dalert ? dalert->state : DOM_ALERT_STATE_INACTIVE;
 }
 
-static ticks_t GetAlertDuration(Arena *arena, DomAlertType type) {
+static ticks_t GetAlertTimeRemaining(Arena *arena, DomAlertType type) {
   if (!arena) {
-    lm->Log(L_ERROR, "<%s> ERROR: SetAlertState called with a null arena parameter", DOM_MODULE_NAME);
+    lm->Log(L_ERROR, "<%s> ERROR: GetAlertTimeRemaining called with a null arena parameter", DOM_MODULE_NAME);
     return -1;
   }
 
@@ -1723,16 +1842,13 @@ static void SetAlertState(Arena *arena, DomAlertType type, DomAlertState state, 
     return;
   }
 
-  // TODO:
-  // - Allocate new alert data
-  // - If timed, (re)start the timer to trigger the end of the alert
-  // - Update ClearAllAlerts to clear timers as well
-
   DomAlert *dalert = GetDomAlert(arena, type);
   ticks_t now = current_ticks();
 
+  chat->SendArenaMessage(arena, "Alert state changing! Alert: %d, state: %d, duration: %d", type, state, duration);
+
   switch (state) {
-    case DOM_ALERT_STATE_STARTING:
+    case DOM_ALERT_STATE_ACTIVE:
       if (!dalert) {
         dalert = AllocAlert(arena, type);
         if (!dalert) {
@@ -1761,6 +1877,7 @@ static void SetAlertState(Arena *arena, DomAlertType type, DomAlertState state, 
       OnGameAlert(arena, type, state, duration);
       break;
 
+    case DOM_ALERT_STATE_INACTIVE:
     case DOM_ALERT_STATE_CLEARED:
     case DOM_ALERT_STATE_EXPIRED:
       if (dalert) {
@@ -1883,6 +2000,10 @@ static void ClearGameTimers(Arena *arena) {
   }
 
   ClearAllAlerts(arena);
+
+  mainloop->ClearTimer(OnGameDefenseTimer, arena);
+  mainloop->ClearTimer(OnGameCooldownTimer, arena);
+  mainloop->ClearTimer(OnGameEndTimer, arena);
 }
 
 static int UpdateFlagStateTimer(void *param) {
@@ -1901,6 +2022,73 @@ static void UpdateFlagState(Arena *arena) {
   if (!adata->updating_flag_status) {
     adata->updating_flag_status = 1;
     mainloop->SetTimer(UpdateFlagStateTimer, 100, 0, arena, arena);
+  }
+}
+
+static void CheckActivePlayerCounts(Arena *arena) {
+  DomArena *adata = P_ARENA_DATA(arena, adkey);
+
+  int count = 0;
+  LinkedList *keys;
+  Link *link;
+  char *key;
+
+  if (adata->teams_initialized) {
+    DomGameState game_state = GetGameState(arena);
+    DomAlertState alert_state = GetAlertState(arena, DOM_ALERT_TYPE_GAME_STARTING);
+
+    if (adata->cfg_min_players > 0 && (game_state == DOM_GAME_STATE_ACTIVE || game_state == DOM_GAME_STATE_INACTIVE)) {
+      keys = HashGetKeys(&adata->teams);
+      FOR_EACH(keys, key, link) {
+        DomTeam *dteam = HashGetOne(&adata->teams, key);
+        if (dteam) {
+          if (adata->cfg_min_players_per_team > 0 && dteam->players.ents < adata->cfg_min_players_per_team) {
+            chat->SendArenaMessage(arena, "not enough players per-team");
+            count = 0;
+            break;
+          }
+
+          count += dteam->players.ents;
+        }
+      }
+
+      if (count < adata->cfg_min_players) {
+        chat->SendArenaMessage(arena, "Count below min required");
+
+        if (game_state == DOM_GAME_STATE_ACTIVE) {
+          // Start neutralizing flags
+          chat->SendArenaMessage(arena, "I should start neutralizing flags now because everyone left.");
+        }
+        else if (alert_state == DOM_ALERT_STATE_ACTIVE) {
+          SetAlertState(arena, DOM_ALERT_TYPE_GAME_STARTING, DOM_ALERT_STATE_CLEARED, 0);
+        }
+      }
+      else {
+        chat->SendArenaMessage(arena, "Count meets or exceeds required");
+        if (game_state == DOM_GAME_STATE_INACTIVE && alert_state == DOM_ALERT_STATE_INACTIVE) {
+          SetAlertState(arena, DOM_ALERT_TYPE_GAME_STARTING, DOM_ALERT_STATE_ACTIVE, (adata->cfg_game_start_countdown > 5 ? adata->cfg_game_start_countdown : 5) * 100);
+        }
+        else {
+          chat->SendArenaMessage(arena, "game state is not inactive or alert state is not inactive");
+        }
+      }
+    }
+    else if (game_state == DOM_GAME_STATE_INACTIVE && alert_state == DOM_ALERT_STATE_INACTIVE) {
+      SetAlertState(arena, DOM_ALERT_TYPE_GAME_STARTING, DOM_ALERT_STATE_ACTIVE, (adata->cfg_game_start_countdown > 5 ? adata->cfg_game_start_countdown : 5) * 100);
+    }
+    else {
+      chat->SendArenaMessage(arena, "min players not set and game state is not active or inactive");
+
+      if (alert_state == DOM_ALERT_STATE_ACTIVE) {
+        SetAlertState(arena, DOM_ALERT_TYPE_GAME_STARTING, DOM_ALERT_STATE_CLEARED, 0);
+      }
+    }
+  }
+}
+
+static void GetPlayerHashKey(Player *player, char *key, size_t len) {
+  for (int i = 0; i < len && player->name[i]; ++i) {
+    key[i] = tolower(player->name[i]);
   }
 }
 
@@ -2058,7 +2246,7 @@ static void OnFlagStateChange(Arena *arena, DomFlag *dflag, DomFlagState prev_st
                 SetRegionState(dregion, DOM_REGION_STATE_CAPTURING, iteam, 0);
               }
               else {
-                // Region becomes neutral -- all teams are contesting the crap out of it
+                // Region becomes neutrxal -- all teams are contesting the crap out of it
                 SetRegionState(dregion, DOM_REGION_STATE_NEUTRAL, NULL, 0);
               }
             }
@@ -2124,7 +2312,7 @@ static void OnRegionStateChange(Arena *arena, DomRegion *dregion, DomRegionState
     // Check if we need to set the domination timer
     if (new_state == DOM_REGION_STATE_CONTROLLED && GetDominatingTeam(arena)) {
       // Set alert state
-      SetAlertState(arena, DOM_ALERT_TYPE_DOMINATION, DOM_ALERT_STATE_STARTING, adata->cfg_domination_countdown);
+      SetAlertState(arena, DOM_ALERT_TYPE_DOMINATION, DOM_ALERT_STATE_ACTIVE, adata->cfg_domination_countdown * 100);
     }
     else {
       // Clear alert
@@ -2134,7 +2322,9 @@ static void OnRegionStateChange(Arena *arena, DomRegion *dregion, DomRegionState
 }
 
 static void OnFlagCleanup(Arena *arena, int flag_id, int reason, Player *carrier, int freq) {
-  chat->SendArenaMessage(arena, "Flag cleanup! Flag: %d, reason: %d, Freq: %d Player: %s", flag_id, reason, freq, carrier->name);
+  lm->LogA(L_ERROR, DOM_MODULE_NAME, arena, "Flag cleanup called! Flag: %d, reason: %d, Freq: %d Player: %s", flag_id, reason, freq, carrier ? carrier->name : "<null>");
+
+  // We have nothing to do here, because it shouldn't be called.
 }
 
 static void OnFlagReset(Arena *arena, int freq, int points) {
@@ -2146,37 +2336,67 @@ static void OnFlagReset(Arena *arena, int freq, int points) {
 }
 
 static void OnGameStateChange(Arena *arena, DomGameState old_state, DomGameState new_state) {
-  if (new_state == DOM_GAME_STATE_FINISHED) {
-    // we've finished handling the end-of-game event; transition back to INACTIVE to prepare for
-    // the next game
-    SetGameState(arena, DOM_GAME_STATE_INACTIVE);
+  switch (new_state) {
+    case DOM_GAME_STATE_INACTIVE:
+      // Check if we can start immediately...
+      CheckActivePlayerCounts(arena);
+      break;
+
+    case DOM_GAME_STATE_FINISHED:
+      // we've finished handling the end-of-game event; transition to either COOLDOWN to prepare for
+      // the next game
+      SetGameState(arena, DOM_GAME_STATE_COOLDOWN);
+      break;
   }
 }
 
-static int OnGameStartTimer(void *param) {
-  DomArena *adata = (DomArena*) param;
+static int OnGameCooldownTimer(void *param) {
+  DomArena *adata = P_ARENA_DATA((Arena*) param, adkey);
 
-  SetGameState(adata->arena, DOM_GAME_STATE_ACTIVE);
+  if (GetGameState(adata->arena) == DOM_GAME_STATE_COOLDOWN) {
+    // Cooldown expired; set state to INACTIVE
+    SetGameState(adata->arena, DOM_GAME_STATE_INACTIVE);
+  }
+  else {
+    lm->LogA(L_ERROR, DOM_MODULE_NAME, adata->arena, "Game cooldown timer expired, but the game is in the wrong state (%d)", GetGameState(adata->arena));
+  }
+
   return 0;
 }
 
 static int OnGameEndTimer(void *param) {
-  DomArena *adata = (DomArena*) param;
+  DomArena *adata = P_ARENA_DATA((Arena*) param, adkey);
 
-  // Game ended via time; set game state to FINISHED
-  SetGameState(adata->arena, DOM_GAME_STATE_FINISHED);
+  if (GetGameState(adata->arena) == DOM_GAME_STATE_ACTIVE) {
+    // Game ended via time; set game state to FINISHED
+    SetGameState(adata->arena, DOM_GAME_STATE_FINISHED);
+  }
+  else {
+    lm->LogA(L_ERROR, DOM_MODULE_NAME, adata->arena, "Game cooldown timer expired, but the game is in the wrong state (%d)", GetGameState(adata->arena));
+  }
+
   return 0;
 }
 
 static void OnGameAlert(Arena *arena, DomAlertType type, DomAlertState state, ticks_t duration) {
-  DomArena *adata = P_ARENA_DATA(arena, adkey);
-
   switch (type) {
+    case DOM_ALERT_TYPE_GAME_STARTING:
+      if ((state == DOM_ALERT_STATE_ACTIVE && !duration) || state == DOM_ALERT_STATE_EXPIRED) {
+        if (GetGameState(arena) == DOM_GAME_STATE_INACTIVE) {
+          SetGameState(arena, DOM_GAME_STATE_ACTIVE);
+        }
+        else {
+          lm->LogA(L_ERROR, DOM_MODULE_NAME, arena, "Game starting alert expired, but the game is in the wrong state (%d)", GetGameState(arena));
+        }
+      }
+      break;
+
     case DOM_ALERT_TYPE_DOMINATION:
-      if (state == DOM_ALERT_STATE_EXPIRED) {
+      if ((state == DOM_ALERT_STATE_ACTIVE && !duration) || state == DOM_ALERT_STATE_EXPIRED) {
         // Domination!
         DomTeam *dteam = GetDominatingTeam(arena);
         if (dteam) {
+          chat->SendArenaMessage(arena, "Domination! Team %d has won. Setting game state to FINISHED", dteam->cfg_team_freq);
           SetGameState(arena, DOM_GAME_STATE_FINISHED);
         }
         else {
@@ -2195,37 +2415,121 @@ static int OnGameAlertTimer(void *param) {
   return 0;
 }
 
+static int OnGameDefenseTimer(void *param) {
+  DomArena *adata = P_ARENA_DATA((Arena*) param, adkey);
 
+  if (adata->flags_initialized && adata->cfg_defense_reward_radius > 0 && GetGameState(adata->arena) == DOM_GAME_STATE_ACTIVE) {
+    pd->Lock();
 
+    HashTable pmap;
+    LinkedList plist, *fkeys, *pkeys;
+    Link *flink, *plink;
+    char *fkey, *pkey;
 
+    HashInit(&pmap);
 
+    fkeys = HashGetKeys(&adata->flags);
+    FOR_EACH(fkeys, fkey, flink) {
+      DomFlag *dflag = HashGetOne(&adata->flags, fkey);
+
+      if (dflag && GetFlagState(dflag) == DOM_FLAG_STATE_CONTROLLED) {
+        DomTeam *cteam = GetFlagControllingTeam(dflag);
+
+        if (cteam) {
+          LLInit(&plist);
+
+          pkeys = HashGetKeys(&cteam->players);
+          FOR_EACH(pkeys, pkey, plink) {
+            Player *player = HashGetOne(&cteam->players, pkey);
+            if (player && !HashGetOne(&pmap, pkey)) {
+              int dx = (player->position.x - dflag->x);
+              int dy = (player->position.y - dflag->y);
+              int dsq = dx * dx + dy * dy;
+
+              if (dsq <= adata->cfg_defense_reward_radius) {
+                LLAdd(&plist, player);
+                HashReplace(&pmap, pkey, player);
+              }
+            }
+          }
+
+          if (plist.start) {
+            DO_CBS(CB_DOM_FLAG_DEFENSE, adata->arena, DomFlagDefenseFunc, (adata->arena, dflag, &plist));
+            LLEmpty(&plist);
+          }
+        }
+      }
+    }
+
+    HashDeinit(&pmap);
+    pd->Unlock();
+  }
+
+  return 1;
+}
 
 static void OnPlayerAction(Player *player, int action, Arena *arena) {
+  char pkey[24];
+
   switch (action) {
     case PA_ENTERARENA:
+      if (IS_STANDARD(player) && !IS_SPEC(player)) {
+        DomTeam *dteam = GetDomTeam(arena, player->p_freq);
+
+        if (dteam) {
+          GetPlayerHashKey(player, pkey, 24);
+          HashReplace(&dteam->players, pkey, player);
+        }
+      }
+
+      CheckActivePlayerCounts(arena);
       break;
 
     case PA_LEAVEARENA:
+      if (IS_STANDARD(player)) {
+        DomTeam *dteam = GetDomTeam(arena, player->p_freq);
+
+        if (dteam) {
+          GetPlayerHashKey(player, pkey, 24);
+          HashRemoveAny(&dteam->players, pkey);
+        }
+      }
+
+      CheckActivePlayerCounts(arena);
       break;
   }
 }
 
-static void OnPlayerDeath(Arena *arena, Player *killer, Player *killed, int bounty, int flags, int *pts, int *green) {
-
-}
-
-static void OnPlayerSpawn(Player *player, int reason) {
-
-}
-
 static void OnPlayerFreqShipChange(Player *player, int newship, int oldship, int newfreq, int oldfreq) {
-  DomArena *adata = P_ARENA_DATA(player->arena, adkey);
+  DomTeam *dteam;
+  char pkey[24];
 
-  if (newship != oldship || newfreq != oldfreq) {
+  if (IS_STANDARD(player) && ((newship != oldship && (newship == SHIP_SPEC || oldship == SHIP_SPEC)) || newfreq != oldfreq)) {
+    // Remove player from previous team
+    GetPlayerHashKey(player, pkey, 24);
+
+    if ((dteam = GetDomTeam(player->arena, oldfreq))) {
+      HashRemoveAny(&dteam->players, pkey);
+    }
+
+    // Add player to new team
+    if ((dteam = GetDomTeam(player->arena, newfreq))) {
+      HashReplace(&dteam->players, pkey, player);
+    }
+
     // Check if we need to start the STARTING alert to kick off a new game, or if we need to start
     // prematurely ending an existing game
+    CheckActivePlayerCounts(player->arena);
   }
 }
+
+// static void OnPlayerDeath(Arena *arena, Player *killer, Player *killed, int bounty, int flags, int *pts, int *green) {
+
+// }
+
+// static void OnPlayerSpawn(Player *player, int reason) {
+
+// }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -2265,7 +2569,10 @@ static Idomination domination_interface = {
   SetRegionState,
   GetDominatingTeam,
   GetGameState,
+  GetGameTimeRemaining,
   SetGameState,
+  GetAlertState,
+  GetAlertTimeRemaining,
   SetAlertState
 };
 
@@ -2294,9 +2601,10 @@ static int GetInterfaces(Imodman *modman, Arena *arena)
     mainloop  = mm->GetInterface(I_MAINLOOP, ALLARENAS);
     mapdata   = mm->GetInterface(I_MAPDATA, ALLARENAS);
     pd        = mm->GetInterface(I_PLAYERDATA, ALLARENAS);
+    prng      = mm->GetInterface(I_PRNG, ALLARENAS);
 
     return mm &&
-      (arenaman && cfg && chat && flagcore && lm && mainloop && mapdata && pd);
+      (arenaman && cfg && chat && flagcore && lm && mainloop && mapdata && pd && prng);
   }
 
   return 0;
@@ -2317,6 +2625,7 @@ static void ReleaseInterfaces()
     mm->ReleaseInterface(mainloop);
     mm->ReleaseInterface(mapdata);
     mm->ReleaseInterface(pd);
+    mm->ReleaseInterface(prng);
 
     mm = NULL;
   }
@@ -2361,6 +2670,7 @@ EXPORT int MM_domination(int action, Imodman *modman, Arena *arena)
     case MM_ATTACH:
       mm->RegCallback(CB_ARENAACTION, OnArenaAction, arena);
       mm->RegCallback(CB_FLAGRESET, OnFlagReset, arena);
+      mm->RegCallback(CB_PLAYERACTION, OnPlayerAction, arena);
       mm->RegCallback(CB_SHIPFREQCHANGE, OnPlayerFreqShipChange, arena);
 
       mm->RegInterface(&flagcore_flaggame_interface, arena);
@@ -2377,6 +2687,7 @@ EXPORT int MM_domination(int action, Imodman *modman, Arena *arena)
       mm->UnregInterface(&flagcore_flaggame_interface, arena);
 
       mm->UnregCallback(CB_SHIPFREQCHANGE, OnPlayerFreqShipChange, arena);
+      mm->UnregCallback(CB_PLAYERACTION, OnPlayerAction, arena);
       mm->UnregCallback(CB_FLAGRESET, OnFlagReset, arena);
       mm->UnregCallback(CB_ARENAACTION, OnArenaAction, arena);
 

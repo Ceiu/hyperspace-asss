@@ -32,7 +32,6 @@ local Iprng *prng;
 local Ipersist *persist;
 local Inet *net;
 
-#define IS_SPEC(p) ((p->p_ship == SHIP_SPEC))
 #define IS_PLAYING(p,a) ((p->p_ship != SHIP_SPEC) && (p->arena == a))
 #define IS_IN(p,a) (p->arena == a)
 #define IS_ON_FREQ(p,a,f) ((p->arena == a) && (p->p_freq == f))

@@ -42,6 +42,8 @@ enum
 /** is this player a human (as opposed to an internally controlled fake
  * player)? */
 #define IS_HUMAN(p) (IS_STANDARD(p) || IS_CHAT(p))
+/** Is the player in spectator mode? */
+#define IS_SPEC(p) ((p)->p_ship == SHIP_SPEC)
 
 
 /** player status codes */

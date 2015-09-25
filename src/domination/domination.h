@@ -23,6 +23,9 @@ typedef enum {
   /* The current game has just finished and modules are processing the end-of-game event */
   DOM_GAME_STATE_FINISHED,
 
+  /* The previous game has finished, and is now in a cooldown before starting the next game */
+  DOM_GAME_STATE_COOLDOWN,
+
   /* An error occurred at some point during the game. Once in this state, any existing game will be
    * lost */
   DOM_GAME_STATE_ERROR
@@ -79,10 +82,13 @@ typedef enum {
   /* Unknown alert state */
   DOM_ALERT_STATE_UNKNOWN,
 
-  /* The alert is starting */
-  DOM_ALERT_STATE_STARTING,
+  /* The alert is inactive or has not been set */
+  DOM_ALERT_STATE_INACTIVE,
 
-  /* The alert is ending (timed events only) */
+  /* The alert has started/is now active */
+  DOM_ALERT_STATE_ACTIVE,
+
+  /* The alert has ended naturally (timed events only) */
   DOM_ALERT_STATE_EXPIRED,
 
   /* The alert was cleared before expiring */
@@ -129,11 +135,27 @@ typedef void (*DomFlagStateChangedFunc)(Arena *arena, DomFlag *dflag, DomFlagSta
  *  Whether or not the alert is starting or ending
  *
  * @param duration
- *  The duration of the alert, in ticks; will be zero when the alert is ending or when setting an
- *  alert which is not timed or does not persist
+ *  The duration of the alert, in ticks; will be zero for alerts which are not timed; undefined for
+ *  states other than DOM_ALERT_STATE_ACTIVE.
  */
 #define CB_DOM_ALERT "dom_alert-cb-1"
 typedef void (*DomAlertFunc)(Arena *arena, DomAlertType type, DomAlertState state, ticks_t duration);
+
+/**
+ * Called periodically when a player (or players) defends a flag
+ *
+ * @param *arena
+ *  The arena in which the game is taking place
+ *
+ * @param *dflag
+ *  The DomFlag instance representing the flag being defended
+ *
+ * @param *players
+ *  A list of players defending the given flag; should always contain at least one player; should
+ *  not be modified or freed
+ */
+#define CB_DOM_FLAG_DEFENSE "dom_defense-cb-1"
+typedef void (*DomFlagDefenseFunc)(Arena *arena, DomFlag *dflag, LinkedList *players);
 
 
 // Interface
@@ -166,7 +188,10 @@ typedef struct Idomination {
   void (*SetRegionState)(DomRegion *dregion, DomRegionState state, DomTeam *dteam, int influence);
   DomTeam* (*GetDominatingTeam)(Arena *arena);
   DomGameState (*GetGameState)(Arena *arena);
+  ticks_t (*GetGameTimeRemaining)(Arena *arena);
   void (*SetGameState)(Arena *arena, DomGameState state);
+  DomAlertState (*GetAlertState)(Arena *arena, DomAlertType type);
+  ticks_t (*GetAlertTimeRemaining)(Arena *arena, DomAlertType type);
   void (*SetAlertState)(Arena *arena, DomAlertType type, DomAlertState state, ticks_t duration);
 } Idomination;
 

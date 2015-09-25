@@ -941,13 +941,13 @@ void * HashRemoveAny(HashTable *h, const char *s)
 			afree(l);
 			h->ents--;
 			check_rehash(h);
-			return;
+			return val;
 		}
 		prev = l;
 		l = l->next;
 	}
 
-	return val;
+	return NULL;
 }
 
 LinkedList * HashGet(HashTable *h, const char *s)
