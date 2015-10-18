@@ -17,10 +17,12 @@ local double evaluate_assignment(AssignmentNode *node, HashTable *vars, char *er
 local Ilogman *lm;
 local Iplayerdata *pd;
 local Imodman *mm;
+local Iprng *prng;
 
 local HashTable *arena_callbacks;
 local HashTable *freq_callbacks;
 local HashTable *player_callbacks;
+local HashTable *flag_callbacks;
 
 local FormulaVariable * arena_players_callback(Arena *arena)
 {
@@ -275,11 +277,52 @@ local FormulaVariable * player_bounty_callback(Player *p)
 	return var;
 }
 
+local FormulaVariable * flag_player_callback(FlagInfo *flag)
+{
+
+}
+
+local FormulaVariable * flag_freq_callback(FlagInfo *flag)
+{
+
+}
+
+local FormulaVariable * flag_xcoord_callback(FlagInfo *flag)
+{
+
+}
+
+local FormulaVariable * flag_ycoord_callback(FlagInfo *flag)
+{
+
+}
+
+local FormulaVariable * flag_state_callback(FlagInfo *flag)
+{
+
+}
+
+
+
+
 local double evaluate_function(const char *name, double *params, int param_len, char *error_buf, int buf_len)
 {
-	// TODO: add random functions
+	if (param_len == 0)
+	{
+		double (*func)() = NULL;
 
-	if (param_len == 1)
+		if (strcasecmp(name, "rand") == 0)
+			func = prng->Rand;
+		else if (strcasecmp(name, "uniform") == 0)
+			func = prng->Uniform;
+		else
+		{
+			snprintf(error_buf, buf_len, "Unknown nullary function '%s'", name);
+			return 0.0;
+		}
+		return (func)();
+	}
+	else if (param_len == 1)
 	{
 		double (*func)(double) = NULL;
 
@@ -347,6 +390,8 @@ local double evaluate_function(const char *name, double *params, int param_len, 
 			func = fmin;
 		else if (strcasecmp(name, "mod") == 0)
 			func = fmod;
+		else if (strcasecmp(name, "rand") == 0)
+			func = prng->Number;
 		else if (strcasecmp(name, "remainder") == 0)
 			func = remainder;
 		else
@@ -435,6 +480,10 @@ local void free_ast(ASTNode *node)
 
 local void FreeFormula(Formula *formula)
 {
+	if (!formula) {
+		return;
+	}
+
 	if (formula->assign_list)
 	{
 		Link *link;
@@ -532,7 +581,7 @@ local FormulaVariable * evaluate_variable(ASTNode *node, HashTable *vars, char *
 					PlayerPropertyCallback cb = HashGetOne(player_callbacks, node->deref.field);
 					if (cb)
 					{
-						ret_val = cb(var->p);
+						ret_val = cb(var->player);
 						LLAdd(temp_vars, ret_val);
 						return ret_val;
 					}
@@ -542,8 +591,24 @@ local FormulaVariable * evaluate_variable(ASTNode *node, HashTable *vars, char *
 						return NULL;
 					}
 				}
+				case VAR_TYPE_FLAG:
+				{
+					FlagPropertyCallback cb = HashGetOne(flag_callbacks, node->deref.field);
+					if (cb)
+					{
+						ret_val = cb(var->flag);
+						LLAdd(temp_vars, ret_val);
+						return ret_val;
+					}
+					else
+					{
+						snprintf(error_buffer, error_buffer_length, "Cannot dereference flag variable with '%s'", node->deref.field);
+						return NULL;
+					}
+				}
 				case VAR_TYPE_FREQ_LIST:
 				case VAR_TYPE_PLAYER_LIST:
+				case VAR_TYPE_FLAG_LIST:
 					if (strcmp(node->deref.field, "length") == 0)
 					{
 						FormulaVariable *length = amalloc(sizeof(FormulaVariable));
@@ -996,6 +1061,16 @@ void RegFreqProperty(const char *property, FreqPropertyCallback cb)
 
 void UnregFreqProperty(const char *property, FreqPropertyCallback cb)
 {
+	HashRemove(freq_callbacks, property, cb);
+}
+
+void RegFlagProperty(const char *property, FlagPropertyCallback cb)
+{
+	HashAdd(flag_callbacks, property, cb);
+}
+
+void UnregFlagProperty(const char *property, FlagPropertyCallback cb)
+{
 	HashRemove(arena_callbacks, property, cb);
 }
 
@@ -1006,7 +1081,7 @@ void RegPlayerProperty(const char *property, PlayerPropertyCallback cb)
 
 void UnregPlayerProperty(const char *property, PlayerPropertyCallback cb)
 {
-	HashRemove(arena_callbacks, property, cb);
+	HashRemove(player_callbacks, property, cb);
 }
 
 local Iformula interface =
@@ -1016,6 +1091,7 @@ local Iformula interface =
 	RegArenaProperty, UnregArenaProperty,
 	RegFreqProperty, UnregFreqProperty,
 	RegPlayerProperty, UnregPlayerProperty,
+	RegFlagProperty, UnregFlagProperty,
 };
 
 EXPORT const char info_formula[] = "v2.0 Dr Brain <drbrain@gmail.com>";
@@ -1028,13 +1104,15 @@ EXPORT int MM_formula(int action, Imodman *_mm, Arena *arena)
 
 		lm = mm->GetInterface(I_LOGMAN, ALLARENAS);
 		pd = mm->GetInterface(I_PLAYERDATA, ALLARENAS);
+		prng = mm->GetInterface(I_PRNG, ALLARENAS);
 
-		if (!lm || !pd)
+		if (!lm || !pd || !prng)
 			return MM_FAIL;
 
 		arena_callbacks = HashAlloc();
 		freq_callbacks = HashAlloc();
 		player_callbacks = HashAlloc();
+		flag_callbacks = HashAlloc();
 
 		RegArenaProperty("players", arena_players_callback);
 		RegArenaProperty("specs", arena_specs_callback);
@@ -1050,6 +1128,11 @@ EXPORT int MM_formula(int action, Imodman *_mm, Arena *arena)
 		RegPlayerProperty("arena", player_arena_callback);
 		RegPlayerProperty("freq", player_freq_callback);
 		RegPlayerProperty("bounty", player_bounty_callback);
+		RegFlagProperty("player", flag_player_callback);
+		RegFlagProperty("freq", flag_freq_callback);
+		RegFlagProperty("x", flag_xcoord_callback);
+		RegFlagProperty("y", flag_ycoord_callback);
+		RegFlagProperty("state", flag_state_callback);
 
 		mm->RegInterface(&interface, ALLARENAS);
 
@@ -1062,6 +1145,7 @@ EXPORT int MM_formula(int action, Imodman *_mm, Arena *arena)
 
 		mm->ReleaseInterface(lm);
 		mm->ReleaseInterface(pd);
+		mm->ReleaseInterface(prng);
 
 		UnregArenaProperty("players", arena_players_callback);
 		UnregArenaProperty("specs", arena_specs_callback);
@@ -1077,10 +1161,16 @@ EXPORT int MM_formula(int action, Imodman *_mm, Arena *arena)
 		UnregPlayerProperty("arena", player_arena_callback);
 		UnregPlayerProperty("freq", player_freq_callback);
 		UnregPlayerProperty("bounty", player_bounty_callback);
+		UnregFlagProperty("player", flag_player_callback);
+		UnregFlagProperty("freq", flag_freq_callback);
+		UnregFlagProperty("x", flag_xcoord_callback);
+		UnregFlagProperty("y", flag_ycoord_callback);
+		UnregFlagProperty("state", flag_state_callback);
 
 		HashFree(arena_callbacks);
 		HashFree(freq_callbacks);
 		HashFree(player_callbacks);
+		HashFree(flag_callbacks);
 
 		return MM_OK;
 	}
