@@ -244,6 +244,8 @@ static DomAlert* GetDomAlert(Arena *arena, DomAlertType type);
 static int ReadArenaConfig(Arena *arena);
 
 static DomFlag* GetDomFlag(Arena *arena, int flag_id);
+static int GetFlagID(DomFlag *dflag);
+static int GetFlagInfo(DomFlag *dflag, FlagInfo *flaginfo);
 static DomTeam* GetDomTeam(Arena *arena, int freq);
 static DomRegion* GetDomRegion(Arena *arena, const char *region_name);
 static int GetFlagProvidedInfluence(DomFlag *dflag);
@@ -1018,6 +1020,24 @@ static DomFlag* GetDomFlag(Arena *arena, int flag_id) {
   }
 
   return dflag;
+}
+
+static int GetFlagID(DomFlag *dflag) {
+  if (!dflag) {
+    lm->Log(L_ERROR, "<%s> ERROR: GetFlagID called with a null dflag parameter", DOM_MODULE_NAME);
+    return -1;
+  }
+
+  return dflag->flag_id;
+}
+
+static int GetFlagInfo(DomFlag *dflag, FlagInfo *flaginfo) {
+  if (!dflag) {
+    lm->Log(L_ERROR, "<%s> ERROR: GetFlagInfo called with a null dflag parameter", DOM_MODULE_NAME);
+    return 0;
+  }
+
+  return flagcore->GetFlags(dflag->arena, dflag->flag_id, flaginfo, 1);
 }
 
 static DomTeam* GetDomTeam(Arena *arena, int freq) {
@@ -2545,6 +2565,8 @@ static Idomination domination_interface = {
   INTERFACE_HEAD_INIT(I_DOMINATION, DOM_MODULE_NAME "-iface")
 
   GetDomFlag,
+  GetFlagID,
+  GetFlagInfo,
   GetDomTeam,
   GetDomRegion,
   GetFlagProvidedInfluence,

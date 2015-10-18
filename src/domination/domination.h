@@ -164,6 +164,21 @@ typedef struct Idomination {
   INTERFACE_HEAD_DECL
 
   DomFlag* (*GetDomFlag)(Arena *arena, int flag_id);
+  int (*GetFlagID)(DomFlag *dflag);
+
+  /**
+   * Fills the specified FlagInfo struct with information for the specified DomFlag.
+   *
+   * @param *dflag
+   *  The flag for which to retrieve flag information
+   *
+   * @param *flaginfo
+   *  Pointer to a FlagInfo struct to fill with flag information
+   *
+   * @return
+   *  Non-zero if the flag info was retrieved successfully; zero otherwise
+   */
+  int (*GetFlagInfo)(DomFlag *dflag, FlagInfo *flaginfo);
   DomTeam* (*GetDomTeam)(Arena *arena, int freq);
   DomRegion* (*GetDomRegion)(Arena *arena, const char *region_name);
   int (*GetFlagProvidedInfluence)(DomFlag *dflag);
