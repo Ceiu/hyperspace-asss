@@ -174,6 +174,9 @@ local void set_flag(Arena *a, int fid, FlagInfo *nfi)
 
 	ofi = &ad->fis[fid];
 
+	// Ensure these are never out of sync.
+	nfi->arena = a;
+
 	if (ad->carrymode == CARRY_NONE)
 	{
 		/* turf flags are handled a little differently. they're always
@@ -732,8 +735,7 @@ local void FlagReset(Arena *a, int freq, int points)
 		if (freq == -1)
 			lm->LogA(L_INFO, "flagcore", a, "flag reset");
 		else
-			lm->LogA(L_INFO, "flagcore", a, "flag victory: freq %d won %d points",
-					freq, points);
+			lm->LogA(L_INFO, "flagcore", a, "flag victory: freq %d won %d points", freq, points);
 
 		endinterval = TRUE;
 	}

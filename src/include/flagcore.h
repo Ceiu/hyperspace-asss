@@ -50,6 +50,7 @@ enum
 typedef struct FlagInfo
 {
 	/* pytype: struct, struct FlagInfo, flaginfo */
+	Arena *arena;
 	int state;
 	Player *carrier;
 	int x, y;

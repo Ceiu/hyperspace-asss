@@ -277,29 +277,75 @@ local FormulaVariable * player_bounty_callback(Player *p)
 	return var;
 }
 
-local FormulaVariable * flag_player_callback(FlagInfo *flag)
+local FormulaVariable * player_xcoord_callback(Player *p)
 {
+	FormulaVariable *var = amalloc(sizeof(FormulaVariable));
+	var->name = NULL;
+	var->type = VAR_TYPE_DOUBLE;
+	var->value = (double)p->position.x;
 
+	return var;
+}
+
+local FormulaVariable * player_ycoord_callback(Player *p)
+{
+	FormulaVariable *var = amalloc(sizeof(FormulaVariable));
+	var->name = NULL;
+	var->type = VAR_TYPE_DOUBLE;
+	var->value = (double)p->position.y;
+
+	return var;
+}
+
+local FormulaVariable * flag_carrier_callback(FlagInfo *flag)
+{
+	FormulaVariable *var = amalloc(sizeof(FormulaVariable));
+	var->name = NULL;
+	var->type = VAR_TYPE_PLAYER;
+	var->player = flag->carrier;
+
+	return var;
 }
 
 local FormulaVariable * flag_freq_callback(FlagInfo *flag)
 {
+	FormulaVariable *var = amalloc(sizeof(FormulaVariable));
+	var->name = NULL;
+	var->type = VAR_TYPE_FREQ;
+	var->freq.arena = flag->arena;
+	var->freq.freq = flag->freq;
 
+	return var;
 }
 
 local FormulaVariable * flag_xcoord_callback(FlagInfo *flag)
 {
+	FormulaVariable *var = amalloc(sizeof(FormulaVariable));
+	var->name = NULL;
+	var->type = VAR_TYPE_DOUBLE;
+	var->value = (double)flag->x;
 
+	return var;
 }
 
 local FormulaVariable * flag_ycoord_callback(FlagInfo *flag)
 {
+	FormulaVariable *var = amalloc(sizeof(FormulaVariable));
+	var->name = NULL;
+	var->type = VAR_TYPE_DOUBLE;
+	var->value = (double)flag->y;
 
+	return var;
 }
 
 local FormulaVariable * flag_state_callback(FlagInfo *flag)
 {
+	FormulaVariable *var = amalloc(sizeof(FormulaVariable));
+	var->name = NULL;
+	var->type = VAR_TYPE_DOUBLE;
+	var->value = (double)flag->state;
 
+	return var;
 }
 
 
@@ -1128,6 +1174,8 @@ EXPORT int MM_formula(int action, Imodman *_mm, Arena *arena)
 		RegPlayerProperty("arena", player_arena_callback);
 		RegPlayerProperty("freq", player_freq_callback);
 		RegPlayerProperty("bounty", player_bounty_callback);
+		RegPlayerProperty("x", player_xcoord_callback);
+		RegPlayerProperty("y", player_ycoord_callback);
 		RegFlagProperty("player", flag_player_callback);
 		RegFlagProperty("freq", flag_freq_callback);
 		RegFlagProperty("x", flag_xcoord_callback);
@@ -1161,7 +1209,9 @@ EXPORT int MM_formula(int action, Imodman *_mm, Arena *arena)
 		UnregPlayerProperty("arena", player_arena_callback);
 		UnregPlayerProperty("freq", player_freq_callback);
 		UnregPlayerProperty("bounty", player_bounty_callback);
-		UnregFlagProperty("player", flag_player_callback);
+		UnregPlayerProperty("x", player_xcoord_callback);
+		UnregPlayerProperty("y", player_ycoord_callback);
+		UnregFlagProperty("carrier", flag_carrier_callback);
 		UnregFlagProperty("freq", flag_freq_callback);
 		UnregFlagProperty("x", flag_xcoord_callback);
 		UnregFlagProperty("y", flag_ycoord_callback);
