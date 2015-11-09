@@ -76,6 +76,7 @@
 #define DOM_CLAMP(val, min, max) DOM_MIN(DOM_MAX((val), (min)), (max))
 
 #define DOM_TICK_DURATION 100
+#define DOM_FLAG_UPDATE_DELAY 250
 
 #define DOM_DEBUG L_ERROR
 
@@ -178,6 +179,10 @@ struct DomFlag {
   /* The freq that controls the physical flag; used for state management */
   DomTeam *flag_team;
 
+  /* Store player information to throttle client touch events and to track who gets credit for events */
+  Player *last_touched_by;
+  ticks_t last_touch_time;
+
   /* Amount of influence provided by this flag */
   u_int32_t cfg_flag_influence;
 };
@@ -244,10 +249,19 @@ static DomAlert* GetDomAlert(Arena *arena, DomAlertType type);
 static int ReadArenaConfig(Arena *arena);
 
 static DomFlag* GetDomFlag(Arena *arena, int flag_id);
+static int GetDomFlags(Arena *arena, LinkedList *list);
 static int GetFlagID(DomFlag *dflag);
+static char* GetFlagKey(DomFlag *dflag);
 static int GetFlagInfo(DomFlag *dflag, FlagInfo *flaginfo);
+static Arena* GetFlagArena(DomFlag *dflag);
 static DomTeam* GetDomTeam(Arena *arena, int freq);
+static int GetDomTeams(Arena *arena, LinkedList *list);
+static char* GetTeamKey(DomTeam *dteam);
+static Arena* GetTeamArena(DomTeam *dteam);
 static DomRegion* GetDomRegion(Arena *arena, const char *region_name);
+static int GetDomRegions(Arena *arena, LinkedList *list);
+static char* GetRegionKey(DomRegion *dregion);
+static Arena* GetRegionArena(DomRegion *dregion);
 static int GetFlagProvidedInfluence(DomFlag *dflag);
 static int GetFlagContestTime(DomFlag *dflag);
 static int GetFlagCaptureTime(DomFlag *dflag);
@@ -555,6 +569,9 @@ static DomFlag* AllocFlag(Arena *arena) {
     dflag->last_influence_update = 0;
 
     dflag->flag_team = NULL;
+
+    dflag->last_touched_by = NULL;
+    dflag->last_touch_time = 0;
 
     dflag->cfg_flag_influence = 0;
 
@@ -941,6 +958,11 @@ static int ReadArenaConfig(Arena *arena) {
    * zero, no per-team minimum will be enforced. */
   adata->cfg_min_players_per_team = DOM_MAX(cfg->GetInt(arena->cfg, "Domination", "MinPlayersPerTeam", 1), 0);
 
+  if (adata->cfg_min_players < 1 && adata->cfg_min_players_per_team > 0) {
+    // User configuration derpyness. Let's fix this for them.
+    adata->cfg_min_players = adata->cfg_min_players_per_team * adata->cfg_team_count;
+  }
+
   /* cfghelp: Domination:GameDuration, arena, int, def: 60
    * The length of a domination game in minutes. If this value is less than one, the game will
    * not have a time limit, ending only upon domination. */
@@ -1022,6 +1044,38 @@ static DomFlag* GetDomFlag(Arena *arena, int flag_id) {
   return dflag;
 }
 
+static int GetDomFlags(Arena *arena, LinkedList *list) {
+  if (!arena) {
+    lm->Log(L_ERROR, "<%s> ERROR: GetDomFlags called with a null arena parameter", DOM_MODULE_NAME);
+    return -1;
+  }
+
+  if (!list) {
+    lm->Log(L_ERROR, "<%s> ERROR: GetDomFlags called with a null list parameter", DOM_MODULE_NAME);
+    return -1;
+  }
+
+  DomArena *adata = P_ARENA_DATA(arena, adkey);
+  LinkedList *keys;
+  Link *link;
+  char *key;
+
+  int count = 0;
+
+  if (adata->flags_initialized) {
+    keys = HashGetKeys(&adata->flags);
+    FOR_EACH(keys, key, link) {
+      DomFlag *dflag = HashGetOne(&adata->flags, key);
+      if (dflag) {
+        LLAdd(list, dflag);
+        ++count;
+      }
+    }
+  }
+
+  return count;
+}
+
 static int GetFlagID(DomFlag *dflag) {
   if (!dflag) {
     lm->Log(L_ERROR, "<%s> ERROR: GetFlagID called with a null dflag parameter", DOM_MODULE_NAME);
@@ -1031,13 +1085,46 @@ static int GetFlagID(DomFlag *dflag) {
   return dflag->flag_id;
 }
 
+static char* GetFlagKey(DomFlag *dflag) {
+  if (!dflag) {
+    lm->Log(L_ERROR, "<%s> ERROR: GetFlagKey called with a null dflag parameter", DOM_MODULE_NAME);
+    return NULL;
+  }
+
+  return dflag->key;
+}
+
 static int GetFlagInfo(DomFlag *dflag, FlagInfo *flaginfo) {
   if (!dflag) {
     lm->Log(L_ERROR, "<%s> ERROR: GetFlagInfo called with a null dflag parameter", DOM_MODULE_NAME);
     return 0;
   }
 
-  return flagcore->GetFlags(dflag->arena, dflag->flag_id, flaginfo, 1);
+  int result = flagcore->GetFlags(dflag->arena, dflag->flag_id, flaginfo, 1);
+
+  // Fill in the coordinates in the flaginfo, since flagcore doesn't keep it.
+  flaginfo->x = (dflag->x << 4) + 8;
+  flaginfo->y = (dflag->y << 4) + 8;
+
+  return result;
+}
+
+static Arena* GetFlagArena(DomFlag *dflag) {
+  if (!dflag) {
+    lm->Log(L_ERROR, "<%s> ERROR: GetFlagArena called with a null dflag parameter", DOM_MODULE_NAME);
+    return NULL;
+  }
+
+  return dflag->arena;
+}
+
+static Player* GetLastFlagToucher(DomFlag *dflag) {
+  if (!dflag) {
+    lm->Log(L_ERROR, "<%s> ERROR: GetLastFlagToucher called with a null dflag parameter", DOM_MODULE_NAME);
+    return NULL;
+  }
+
+  return dflag->last_touched_by;
 }
 
 static DomTeam* GetDomTeam(Arena *arena, int freq) {
@@ -1067,6 +1154,74 @@ static DomTeam* GetDomTeam(Arena *arena, int freq) {
   return dteam;
 }
 
+static int GetDomTeams(Arena *arena, LinkedList *list) {
+  if (!arena) {
+    lm->Log(L_ERROR, "<%s> ERROR: GetDomTeams called with a null arena parameter", DOM_MODULE_NAME);
+    return -1;
+  }
+
+  if (!list) {
+    lm->Log(L_ERROR, "<%s> ERROR: GetDomTeams called with a null list parameter", DOM_MODULE_NAME);
+    return -1;
+  }
+
+  DomArena *adata = P_ARENA_DATA(arena, adkey);
+  LinkedList *keys;
+  Link *link;
+  char *key;
+
+  int count = 0;
+
+  if (adata->teams_initialized) {
+    keys = HashGetKeys(&adata->teams);
+    FOR_EACH(keys, key, link) {
+      DomTeam *dteam = HashGetOne(&adata->teams, key);
+      if (dteam) {
+        LLAdd(list, dteam);
+        ++count;
+      }
+    }
+  }
+
+  return count;
+}
+
+static int GetTeamFreq(DomTeam *dteam) {
+  if (!dteam) {
+    lm->Log(L_ERROR, "<%s> ERROR: GetTeamFreq called with a null dteam parameter", DOM_MODULE_NAME);
+    return NULL;
+  }
+
+  return dteam->cfg_team_freq;
+}
+
+static char* GetTeamName(DomTeam *dteam) {
+  if (!dteam) {
+    lm->Log(L_ERROR, "<%s> ERROR: GetTeamName called with a null dteam parameter", DOM_MODULE_NAME);
+    return NULL;
+  }
+
+  return dteam->team_name;
+}
+
+static char* GetTeamKey(DomTeam *dteam) {
+  if (!dteam) {
+    lm->Log(L_ERROR, "<%s> ERROR: GetTeamKey called with a null dteam parameter", DOM_MODULE_NAME);
+    return NULL;
+  }
+
+  return dteam->key;
+}
+
+static Arena* GetTeamArena(DomTeam *dteam) {
+  if (!dteam) {
+    lm->Log(L_ERROR, "<%s> ERROR: GetTeamArena called with a null dteam parameter", DOM_MODULE_NAME);
+    return NULL;
+  }
+
+  return dteam->arena;
+}
+
 static DomRegion* GetDomRegion(Arena *arena, const char *region_name) {
   if (!arena) {
     lm->Log(L_ERROR, "<%s> ERROR: GetDomRegion called with a null arena parameter", DOM_MODULE_NAME);
@@ -1086,6 +1241,56 @@ static DomRegion* GetDomRegion(Arena *arena, const char *region_name) {
   }
 
   return dregion;
+}
+
+static int GetDomRegions(Arena *arena, LinkedList *list) {
+  if (!arena) {
+    lm->Log(L_ERROR, "<%s> ERROR: GetDomRegions called with a null arena parameter", DOM_MODULE_NAME);
+    return -1;
+  }
+
+  if (!list) {
+    lm->Log(L_ERROR, "<%s> ERROR: GetDomRegions called with a null list parameter", DOM_MODULE_NAME);
+    return -1;
+  }
+
+  DomArena *adata = P_ARENA_DATA(arena, adkey);
+  LinkedList *keys;
+  Link *link;
+  char *key;
+
+  int count = 0;
+
+  if (adata->regions_initialized) {
+    keys = HashGetKeys(&adata->regions);
+    FOR_EACH(keys, key, link) {
+      DomRegion *dregion = HashGetOne(&adata->regions, key);
+      if (dregion) {
+        LLAdd(list, dregion);
+        ++count;
+      }
+    }
+  }
+
+  return count;
+}
+
+static char* GetRegionKey(DomRegion *dregion) {
+  if (!dregion) {
+    lm->Log(L_ERROR, "<%s> ERROR: GetRegionKey called with a null dregion parameter", DOM_MODULE_NAME);
+    return NULL;
+  }
+
+  return dregion->key;
+}
+
+static Arena* GetRegionArena(DomRegion *dregion) {
+  if (!dregion) {
+    lm->Log(L_ERROR, "<%s> ERROR: GetRegionArena called with a null dregion parameter", DOM_MODULE_NAME);
+    return NULL;
+  }
+
+  return dregion->arena;
 }
 
 static int GetFlagProvidedInfluence(DomFlag *dflag) {
@@ -1282,15 +1487,6 @@ static void SetFlagState(DomFlag *dflag, DomFlagState state, DomTeam *controllin
       OnFlagStateChange(dflag->arena, dflag, pstate, dflag->state);
     }
   }
-}
-
-static char* GetTeamName(DomTeam *dteam) {
-  if (!dteam) {
-    lm->Log(L_ERROR, "<%s> ERROR: GetTeamName called with a null dteam parameter", DOM_MODULE_NAME);
-    return NULL;
-  }
-
-  return dteam->team_name;
 }
 
 static int GetTeamRegionInfluence(DomTeam *dteam, DomRegion *dregion) {
@@ -2057,7 +2253,7 @@ static void CheckActivePlayerCounts(Arena *arena) {
     DomGameState game_state = GetGameState(arena);
     DomAlertState alert_state = GetAlertState(arena, DOM_ALERT_TYPE_GAME_STARTING);
 
-    if (adata->cfg_min_players > 0 && (game_state == DOM_GAME_STATE_ACTIVE || game_state == DOM_GAME_STATE_INACTIVE)) {
+    if (adata->cfg_min_players > 0) {
       keys = HashGetKeys(&adata->teams);
       FOR_EACH(keys, key, link) {
         DomTeam *dteam = HashGetOne(&adata->teams, key);
@@ -2089,19 +2285,13 @@ static void CheckActivePlayerCounts(Arena *arena) {
           SetAlertState(arena, DOM_ALERT_TYPE_GAME_STARTING, DOM_ALERT_STATE_ACTIVE, (adata->cfg_game_start_countdown > 5 ? adata->cfg_game_start_countdown : 5) * 100);
         }
         else {
-          chat->SendArenaMessage(arena, "game state is not inactive or alert state is not inactive");
+          chat->SendArenaMessage(arena, "game state is not inactive or alert state is not inactive -- nothing to do");
         }
       }
     }
     else if (game_state == DOM_GAME_STATE_INACTIVE && alert_state == DOM_ALERT_STATE_INACTIVE) {
+      // We're not tracking player counts, so we just need to start the game
       SetAlertState(arena, DOM_ALERT_TYPE_GAME_STARTING, DOM_ALERT_STATE_ACTIVE, (adata->cfg_game_start_countdown > 5 ? adata->cfg_game_start_countdown : 5) * 100);
-    }
-    else {
-      chat->SendArenaMessage(arena, "min players not set and game state is not active or inactive");
-
-      if (alert_state == DOM_ALERT_STATE_ACTIVE) {
-        SetAlertState(arena, DOM_ALERT_TYPE_GAME_STARTING, DOM_ALERT_STATE_CLEARED, 0);
-      }
     }
   }
 }
@@ -2158,8 +2348,6 @@ static void OnFlagGameInit(Arena *arena) {
   ReadArenaConfig(arena);
 }
 
-
-
 static void OnFlagTouch(Arena *arena, Player *player, int flag_id) {
   DomArena *adata = P_ARENA_DATA(arena, adkey);
   DomFlag *dflag = GetDomFlag(arena, flag_id);
@@ -2167,11 +2355,21 @@ static void OnFlagTouch(Arena *arena, Player *player, int flag_id) {
 
   if (dflag && dflag->regions.ents) {
     if (dteam && adata->game_state == DOM_GAME_STATE_ACTIVE) {
-      // A player is contesting a flag
-      DomTeam *cteam = GetFlagControllingTeam(dflag);
-      int acquired_influence = cteam ? GetFlagAcquiredInfluence(dflag, cteam) : 0;
+      ticks_t now = current_ticks();
 
-      SetFlagState(dflag, DOM_FLAG_STATE_CONTESTED, cteam, acquired_influence, dteam);
+      if (now - dflag->last_touch_time >= DOM_FLAG_UPDATE_DELAY) {
+        // A player is contesting a flag
+        dflag->last_touch_time = now;
+        dflag->last_touched_by = player;
+
+        DomTeam *cteam = GetFlagControllingTeam(dflag);
+        int acquired_influence = cteam ? GetFlagAcquiredInfluence(dflag, cteam) : 0;
+
+        SetFlagState(dflag, DOM_FLAG_STATE_CONTESTED, cteam, acquired_influence, dteam);
+      }
+      else {
+        // Update is too fast; ignore it
+      }
     } else {
       // Touched by someone outside of the domination game or the game is not active. Restore the
       // flag state.
@@ -2416,6 +2614,7 @@ static void OnGameAlert(Arena *arena, DomAlertType type, DomAlertState state, ti
         // Domination!
         DomTeam *dteam = GetDominatingTeam(arena);
         if (dteam) {
+          // TODO: REMOVE THIS MESSAGE
           chat->SendArenaMessage(arena, "Domination! Team %d has won. Setting game state to FINISHED", dteam->cfg_team_freq);
           SetGameState(arena, DOM_GAME_STATE_FINISHED);
         }
@@ -2456,19 +2655,26 @@ static int OnGameDefenseTimer(void *param) {
         DomTeam *cteam = GetFlagControllingTeam(dflag);
 
         if (cteam) {
+          chat->SendArenaMessage(adata->arena, "Checking players for team: %d", cteam->cfg_team_freq);
           LLInit(&plist);
 
           pkeys = HashGetKeys(&cteam->players);
+          pd->Lock();
           FOR_EACH(pkeys, pkey, plink) {
             Player *player = HashGetOne(&cteam->players, pkey);
+            chat->SendArenaMessage(adata->arena, "Checking player: %s", player->name);
+
             if (player && !HashGetOne(&pmap, pkey)) {
-              int dx = (player->position.x - dflag->x);
-              int dy = (player->position.y - dflag->y);
+              int dx = (player->position.x - (dflag->x << 4) + 8);
+              int dy = (player->position.y - (dflag->y << 4) + 8);
               int dsq = dx * dx + dy * dy;
 
               if (dsq <= adata->cfg_defense_reward_radius) {
                 LLAdd(&plist, player);
                 HashReplace(&pmap, pkey, player);
+              }
+              else {
+                chat->SendArenaMessage(adata->arena, "Player is too far away: %d (max: %d)", dsq, adata->cfg_defense_reward_radius);
               }
             }
           }
@@ -2477,6 +2683,10 @@ static int OnGameDefenseTimer(void *param) {
             DO_CBS(CB_DOM_FLAG_DEFENSE, adata->arena, DomFlagDefenseFunc, (adata->arena, dflag, &plist));
             LLEmpty(&plist);
           }
+          else {
+            chat->SendArenaMessage(adata->arena, "No players in the list -- skipping defense callback");
+          }
+          pd->Unlock();
         }
       }
     }
@@ -2491,6 +2701,8 @@ static int OnGameDefenseTimer(void *param) {
 static void OnPlayerAction(Player *player, int action, Arena *arena) {
   char pkey[24];
 
+  chat->SendArenaMessage(player->arena, "---Player action---");
+
   switch (action) {
     case PA_ENTERARENA:
       if (IS_STANDARD(player) && !IS_SPEC(player)) {
@@ -2499,7 +2711,14 @@ static void OnPlayerAction(Player *player, int action, Arena *arena) {
         if (dteam) {
           GetPlayerHashKey(player, pkey, 24);
           HashReplace(&dteam->players, pkey, player);
+          chat->SendArenaMessage(arena, "PA-Enter: player added to new team list");
         }
+        else {
+          chat->SendArenaMessage(arena, "PA-Enter: dteam is null");
+        }
+      }
+      else {
+        chat->SendArenaMessage(arena, "PA-Enter: nonstandard or is spec");
       }
 
       CheckActivePlayerCounts(arena);
@@ -2512,6 +2731,10 @@ static void OnPlayerAction(Player *player, int action, Arena *arena) {
         if (dteam) {
           GetPlayerHashKey(player, pkey, 24);
           HashRemoveAny(&dteam->players, pkey);
+          chat->SendArenaMessage(player->arena, "PA-LEAVE: player removed from old team");
+        }
+        else {
+          chat->SendArenaMessage(arena, "PA-LEAVE: dteam is null");
         }
       }
 
@@ -2524,22 +2747,35 @@ static void OnPlayerFreqShipChange(Player *player, int newship, int oldship, int
   DomTeam *dteam;
   char pkey[24];
 
+  chat->SendArenaMessage(player->arena, "---Player freq/ship change---");
+
   if (IS_STANDARD(player) && ((newship != oldship && (newship == SHIP_SPEC || oldship == SHIP_SPEC)) || newfreq != oldfreq)) {
     // Remove player from previous team
     GetPlayerHashKey(player, pkey, 24);
 
     if ((dteam = GetDomTeam(player->arena, oldfreq))) {
       HashRemoveAny(&dteam->players, pkey);
+      chat->SendArenaMessage(player->arena, "PFSC: player removed from old team list");
+    }
+    else {
+      chat->SendArenaMessage(player->arena, "PFSC: dteam is null for oldfreq (%d)", oldfreq);
     }
 
     // Add player to new team
-    if ((dteam = GetDomTeam(player->arena, newfreq))) {
+    if (newship != SHIP_SPEC && (dteam = GetDomTeam(player->arena, newfreq))) {
       HashReplace(&dteam->players, pkey, player);
+      chat->SendArenaMessage(player->arena, "PFSC: player added to new team list");
+    }
+    else {
+      chat->SendArenaMessage(player->arena, "PFSC: dteam is null or player is in spec now");
     }
 
     // Check if we need to start the STARTING alert to kick off a new game, or if we need to start
     // prematurely ending an existing game
     CheckActivePlayerCounts(player->arena);
+  }
+  else {
+    chat->SendArenaMessage(player->arena, "PFSC: Nonstandard or whatever else");
   }
 }
 
@@ -2565,10 +2801,22 @@ static Idomination domination_interface = {
   INTERFACE_HEAD_INIT(I_DOMINATION, DOM_MODULE_NAME "-iface")
 
   GetDomFlag,
+  GetDomFlags,
   GetFlagID,
+  GetFlagKey,
   GetFlagInfo,
+  GetFlagArena,
+  GetLastFlagToucher,
   GetDomTeam,
+  GetDomTeams,
+  GetTeamFreq,
+  GetTeamName,
+  GetTeamKey,
+  GetTeamArena,
   GetDomRegion,
+  GetDomRegions,
+  GetRegionKey,
+  GetRegionArena,
   GetFlagProvidedInfluence,
   GetFlagContestTime,
   GetFlagCaptureTime,
@@ -2577,7 +2825,6 @@ static Idomination domination_interface = {
   GetFlagEntityControllingTeam,
   GetFlagState,
   SetFlagState,
-  GetTeamName,
   GetTeamRegionInfluence,
   GetTeamAcquiredRegionInfluence,
   GetTeamAcquiredControlPoints,

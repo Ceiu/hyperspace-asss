@@ -358,7 +358,7 @@ local double evaluate_function(const char *name, double *params, int param_len, 
 		double (*func)() = NULL;
 
 		if (strcasecmp(name, "rand") == 0)
-			func = prng->Rand;
+			func = (double (*)()) prng->Rand;
 		else if (strcasecmp(name, "uniform") == 0)
 			func = prng->Uniform;
 		else
@@ -437,7 +437,7 @@ local double evaluate_function(const char *name, double *params, int param_len, 
 		else if (strcasecmp(name, "mod") == 0)
 			func = fmod;
 		else if (strcasecmp(name, "rand") == 0)
-			func = prng->Number;
+			func = (double (*)(double, double)) prng->Number;
 		else if (strcasecmp(name, "remainder") == 0)
 			func = remainder;
 		else
@@ -909,7 +909,7 @@ local double evaluate_ast(ASTNode *node, HashTable *vars, char *error_buffer, in
 						{
 							if (minus->type == VAR_TYPE_PLAYER)
 							{
-								minus_p = minus->p;
+								minus_p = minus->player;
 							}
 							else
 							{
@@ -928,7 +928,7 @@ local double evaluate_ast(ASTNode *node, HashTable *vars, char *error_buffer, in
 							if (p != minus_p)
 							{
 								Link *assign_link;
-								i.p = p;
+								i.player = p;
 								for (assign_link = LLGetHead(node->fornode.body); assign_link; assign_link = assign_link->next)
 								{
 									AssignmentNode *assign = assign_link->data;
@@ -1176,7 +1176,7 @@ EXPORT int MM_formula(int action, Imodman *_mm, Arena *arena)
 		RegPlayerProperty("bounty", player_bounty_callback);
 		RegPlayerProperty("x", player_xcoord_callback);
 		RegPlayerProperty("y", player_ycoord_callback);
-		RegFlagProperty("player", flag_player_callback);
+		RegFlagProperty("player", flag_carrier_callback);
 		RegFlagProperty("freq", flag_freq_callback);
 		RegFlagProperty("x", flag_xcoord_callback);
 		RegFlagProperty("y", flag_ycoord_callback);

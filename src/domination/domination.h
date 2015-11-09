@@ -164,7 +164,22 @@ typedef struct Idomination {
   INTERFACE_HEAD_DECL
 
   DomFlag* (*GetDomFlag)(Arena *arena, int flag_id);
+
+  /**
+   * Retrieves the DomFlags for the given arena. The flags will be appended to the provided list.
+   *
+   * @param *arena
+   *  The arena for which to retrieve flags
+   *
+   * @param *list
+   *  The list to populate with the flags
+   *
+   * @return
+   *  The number of flags retrieved
+   */
+  int (*GetDomFlags)(Arena *arena, LinkedList *list);
   int (*GetFlagID)(DomFlag *dflag);
+  char* (*GetFlagKey)(DomFlag *dflag);
 
   /**
    * Fills the specified FlagInfo struct with information for the specified DomFlag.
@@ -179,8 +194,44 @@ typedef struct Idomination {
    *  Non-zero if the flag info was retrieved successfully; zero otherwise
    */
   int (*GetFlagInfo)(DomFlag *dflag, FlagInfo *flaginfo);
+  Arena* (*GetFlagArena)(DomFlag *dflag);
+  Player* (*GetLastFlagToucher)(DomFlag *dflag);
   DomTeam* (*GetDomTeam)(Arena *arena, int freq);
+
+  /**
+   * Retrieves the DomTeams for the given arena. The teams will be appended to the provided list.
+   *
+   * @param *arena
+   *  The arena for which to retrieve teams
+   *
+   * @param *list
+   *  The list to populate with the teams
+   *
+   * @return
+   *  The number of teams retrieved
+   */
+  int (*GetDomTeams)(Arena *arena, LinkedList *list);
+  int (*GetTeamFreq)(DomTeam *dteam);
+  char* (*GetTeamName)(DomTeam *dteam);
+  char* (*GetTeamKey)(DomTeam *dteam);
+  Arena* (*GetTeamArena)(DomTeam *dteam);
   DomRegion* (*GetDomRegion)(Arena *arena, const char *region_name);
+
+  /**
+   * Retrieves the DomRegions for the given arena. The regions will be appended to the provided list.
+   *
+   * @param *arena
+   *  The arena for which to retrieve regions
+   *
+   * @param *list
+   *  The list to populate with the regions
+   *
+   * @return
+   *  The number of regions retrieved
+   */
+  int (*GetDomRegions)(Arena *arena, LinkedList *list);
+  char* (*GetRegionKey)(DomRegion *dregion);
+  Arena* (*GetRegionArena)(DomRegion *dregion);
   int (*GetFlagProvidedInfluence)(DomFlag *dflag);
   int (*GetFlagContestTime)(DomFlag *dflag);
   int (*GetFlagCaptureTime)(DomFlag *dflag);
@@ -189,7 +240,6 @@ typedef struct Idomination {
   DomTeam* (*GetFlagEntityControllingTeam)(DomFlag *dflag);
   DomFlagState (*GetFlagState)(DomFlag *dflag);
   void (*SetFlagState)(DomFlag *dflag, DomFlagState state, DomTeam *controlling_team, int acquired_influence, DomTeam *flag_entity_team);
-  char* (*GetTeamName)(DomTeam *dteam);
   int (*GetTeamRegionInfluence)(DomTeam *dteam, DomRegion *dregion);
   int (*GetTeamAcquiredRegionInfluence)(DomTeam *dteam, DomRegion *dregion);
   int (*GetTeamAcquiredControlPoints)(DomTeam *dteam);

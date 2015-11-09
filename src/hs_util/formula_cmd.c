@@ -228,7 +228,7 @@ local void free_players()
 local int var_free_enum(const char *key, void *val, void *clos)
 {
 	FormulaVariable *var = val;
-	if (var->name) 
+	if (var->name)
 		afree(var->name);
 	afree(var);
 	return TRUE;
@@ -243,7 +243,7 @@ local void player_action(Player *p, int action, Arena *arena)
 		FormulaVariable *var = amalloc(sizeof(FormulaVariable));
 		var->name = astrdup("me");
 		var->type = VAR_TYPE_PLAYER;
-		var->p = p;
+		var->player = p;
 		pdata->vars = HashAlloc();
 		HashAdd(pdata->vars, var->name, var);
 	}

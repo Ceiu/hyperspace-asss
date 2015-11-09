@@ -475,7 +475,7 @@ local void flagWinCallback(Arena *arena, int freq, int *pts)
 		size_t n_flagging = 0;
 		FOR_EACH_PLAYER_IN_ARENA(i, arena)
 			if (flagging_freq(arena, i->p_freq) && i->p_freq == freq)
-				++n_flagging;	
+				++n_flagging;
 
 		if (n_flagging > 0)
 		{
@@ -485,7 +485,7 @@ local void flagWinCallback(Arena *arena, int freq, int *pts)
 				if (flagging_freq(arena, i->p_freq) && i->p_freq == freq)
 				{
 					char *time_key = playtime_key(i, i->p_freq);
-					ticks_t *playtime = HashGetOne(adata->players_flag_time, time_key);								
+					ticks_t *playtime = HashGetOne(adata->players_flag_time, time_key);
 					flagging_times[j++] = *playtime;
 					afree(time_key);
 				}
@@ -495,7 +495,7 @@ local void flagWinCallback(Arena *arena, int freq, int *pts)
 			afree(flagging_times);
 		}
 
-		//Distribute Wealth    
+		//Distribute Wealth
 		FOR_EACH_PLAYER(i)
 		{
 			if(i->arena == arena && i->p_ship != SHIP_SPEC)
@@ -513,13 +513,13 @@ local void flagWinCallback(Arena *arena, int freq, int *pts)
 					// hsd_reward *= hsd_mul;
 
 					char *time_key = playtime_key(i, i->p_freq);
-					ticks_t *playtime = HashGetOne(adata->players_flag_time, time_key);				
+					ticks_t *playtime = HashGetOne(adata->players_flag_time, time_key);
 					afree(time_key);
 
 					double time_fraction = 1;
 					if (playtime)
 						time_fraction = scale_time_played(*playtime / ((double) q60_playtime));
-					
+
 					hsd_reward *= time_fraction;
 					exp_reward *= time_fraction;
 
@@ -587,10 +587,10 @@ local int calculateKillExpReward(Arena *arena, Player *killer, Player *killed, i
 	FormulaVariable killer_var, killed_var, bounty_var, arena_var;
 	killer_var.name = NULL;
 	killer_var.type = VAR_TYPE_PLAYER;
-	killer_var.p = killer;
+	killer_var.player = killer;
 	killed_var.name = NULL;
 	killed_var.type = VAR_TYPE_PLAYER;
-	killed_var.p = killed;
+	killed_var.player = killed;
 	bounty_var.name = NULL;
 	bounty_var.type = VAR_TYPE_DOUBLE;
 	bounty_var.value = (double)bounty;
@@ -649,10 +649,10 @@ local int calculateKillMoneyReward(Arena *arena, Player *killer, Player *killed,
 	FormulaVariable killer_var, killed_var, bounty_var, arena_var;
 	killer_var.name = NULL;
 	killer_var.type = VAR_TYPE_PLAYER;
-	killer_var.p = killer;
+	killer_var.player = killer;
 	killed_var.name = NULL;
 	killed_var.type = VAR_TYPE_PLAYER;
-	killed_var.p = killed;
+	killed_var.player = killed;
 	bounty_var.name = NULL;
 	bounty_var.type = VAR_TYPE_DOUBLE;
 	bounty_var.value = (double)bounty;
