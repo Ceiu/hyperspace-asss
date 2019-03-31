@@ -107,6 +107,9 @@ local void * work_thread(void *dummy)
 		return NULL;
 	}
 
+	int reconnect = 1;
+	mysql_options(mydb, MYSQL_OPT_RECONNECT, &reconnect);
+
 	pthread_cleanup_push(close_db, mydb);
 
 	connected = 0;
