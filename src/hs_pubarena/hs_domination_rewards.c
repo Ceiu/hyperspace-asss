@@ -29,7 +29,7 @@
 
 #define DOM_EVALUATE_FORMULA(result, adata, formula, formula_vars, ebuffer, cfg_section, cfg_key) \
   ebuffer[0] = 0; \
-  result = formman->EvaluateFormula(formula, formula_vars, NULL, ebuffer, sizeof(ebuffer)); \
+  result = formulas->EvaluateFormula(formula, formula_vars, NULL, ebuffer, sizeof(ebuffer)); \
   \
   if (ebuffer[0] != 0) { \
     adata->active = 0; \
@@ -39,7 +39,7 @@
 
 #define DOM_EVALUATE_FORMULA_TICK(result, adata, formula, formula_vars, ebuffer, cfg_section, cfg_key) \
   ebuffer[0] = 0; \
-  result = formman->EvaluateFormula(formula, formula_vars, NULL, ebuffer, sizeof(ebuffer)); \
+  result = formulas->EvaluateFormula(formula, formula_vars, NULL, ebuffer, sizeof(ebuffer)); \
   \
   if (ebuffer[0] != 0) { \
     adata->active = 0; \
@@ -91,7 +91,7 @@ static Iarenaman *arenaman;
 static Iconfig *cfg;
 static Ichat *chat;
 static Idomination *dom;
-static Iformula *formman;
+static Iformula *formulas;
 static Ihscoredatabase *database;
 static Ihscoreitems *items;
 static Ilogman *lm;
@@ -171,14 +171,14 @@ static void ReadArenaConfig(Arena *arena) {
   adata->cfg_capture_tick_delay = DOM_MAX(cfg->GetInt(arena->cfg, "Domination", "CaptureRewardTickDelay", 3000), 0);
 
 #define DOM_PARSE_CONFIG_FORMULA(formula_var, cfg_section, cfg_key, default_formula) \
-  formman->FreeFormula(formula_var); \
+  formulas->FreeFormula(formula_var); \
   fbuffer = cfg->GetStr(arena->cfg, cfg_section, cfg_key); \
   if (!fbuffer) { \
     fbuffer = default_formula; \
   } \
   \
   if (fbuffer) { \
-    formula_var = formman->ParseFormula(fbuffer, ebuffer, sizeof(ebuffer)); \
+    formula_var = formulas->ParseFormula(fbuffer, ebuffer, sizeof(ebuffer)); \
     if (!formula_var) { \
       lm->LogA(L_ERROR, DOM_REWARDS_MODULE_NAME, arena, "Unable to parse formula \"%s.%s\": %s", cfg_section, cfg_key, ebuffer); \
       return; \
@@ -687,14 +687,14 @@ static int GetInterfaces(Imodman *modman, Arena *arena)
     chat      = mm->GetInterface(I_CHAT, ALLARENAS);
     database  = mm->GetInterface(I_HSCORE_DATABASE, ALLARENAS);
     dom       = mm->GetInterface(I_DOMINATION, ALLARENAS);
-    formman   = mm->GetInterface(I_FORMULA, ALLARENAS);
+    formulas   = mm->GetInterface(I_FORMULA, ALLARENAS);
     items     = mm->GetInterface(I_HSCORE_ITEMS, ALLARENAS);
     lm        = mm->GetInterface(I_LOGMAN, ALLARENAS);
     mainloop  = mm->GetInterface(I_MAINLOOP, ALLARENAS);
     pd        = mm->GetInterface(I_PLAYERDATA, ALLARENAS);
 
     return mm &&
-      (arenaman && cfg && chat && database && dom && formman && items && lm && mainloop && pd);
+      (arenaman && cfg && chat && database && dom && formulas && items && lm && mainloop && pd);
   }
 
   return 0;
@@ -712,7 +712,7 @@ static void ReleaseInterfaces()
     mm->ReleaseInterface(chat);
     mm->ReleaseInterface(database);
     mm->ReleaseInterface(dom);
-    mm->ReleaseInterface(formman);
+    mm->ReleaseInterface(formulas);
     mm->ReleaseInterface(items);
     mm->ReleaseInterface(lm);
     mm->ReleaseInterface(mainloop);
